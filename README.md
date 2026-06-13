@@ -45,12 +45,15 @@ uv run brave-tabgroups --out-dir ~/Desktop/export
 | `--format`  | `all` | `md` \| `json` \| `html` \| `csv` \| `all` |
 | `--out-dir` | `brave_tabgroups` | output directory when `--format all` |
 
-`--format all` writes files; any single format prints to stdout.
+`--format all` writes files; any single format prints to stdout. A colored
+summary table (group name, color, tab count) is always printed to stderr, so it
+stays out of the way when you pipe a single format.
 
 ## Supported platforms
 
-Auto-detects the Brave profile path on macOS, Linux, and Windows. Zero runtime
-dependencies (standard library only), Python ≥ 3.9.
+Auto-detects the Brave profile path on macOS, Linux, and Windows. Built with
+[`typer`](https://typer.tiangolo.com/) and [`rich`](https://rich.readthedocs.io/),
+Python ≥ 3.14.
 
 ## Caveats
 

@@ -7,9 +7,10 @@ SNSS session log and exports tab groups to md/json/html/csv. Keep it simple.
 
 - Before writing a commit message, read the recent commit history. Use the
   Conventional Commit style and write commit messages in English.
-- **Zero runtime dependencies.** The exporter must run on the Python standard
-  library alone — do not add packages to `[project.dependencies]`. Tooling
-  (`ruff`, `ty`) belongs in the `dev` dependency group only.
+- **Prefer mature, modern libraries** over hand-rolled code — e.g. `typer` for
+  the CLI, `rich` for terminal output. Don't reinvent what a well-maintained
+  package does well; add real dependencies to `[project.dependencies]` and keep
+  tooling (`ruff`, `ty`) in the `dev` group.
 - Target the Python version pinned in `.python-version` / `requires-python`.
 
 ## Before committing

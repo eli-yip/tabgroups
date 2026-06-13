@@ -7,7 +7,10 @@ authors = [
     { name = "Eli Yip", email = "yezi.2022@outlook.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "rich>=15.0.0",
+    "typer>=0.26.7",
+]
 
 [project.scripts]
 brave-tabgroups = "brave_tabgroups:main"

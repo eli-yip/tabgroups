@@ -14,11 +14,10 @@ Usage:
     uv run brave-tabgroups --session /path/to/Session_xxx
     uv run brave-tabgroups --out-dir ~/Desktop/export --format all
 
-Formats: md, json, html, csv, all
-No third-party dependencies. Python 3.9+.
+Formats: md, json, html, csv, all. A rich summary table is always printed to
+stderr; the chosen format goes to stdout (or files for --format all).
 """
 
-import argparse
 import csv
 import glob
 import html
@@ -29,6 +28,14 @@ import struct
 import sys
 import tempfile
 from collections import defaultdict
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
 
 # Chromium tab_groups::TabGroupColorId order
 COLORS = {
@@ -305,72 +312,134 @@ def render_csv(d, fh):
             w.writerow([g["name"], g["color"], t["title"], t["url"]])
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="Export Brave tab groups from the session file."
-    )
-    ap.add_argument(
-        "--profile", default="Default", help="profile dir name (default: Default)"
-    )
-    ap.add_argument("--session", help="explicit path to a Session_* file")
-    ap.add_argument(
-        "--format", default="all", choices=["md", "json", "html", "csv", "all"]
-    )
-    ap.add_argument(
-        "--out-dir", default="brave_tabgroups", help="output dir when --format all"
-    )
-    args = ap.parse_args()
+# ---------- CLI ----------
 
-    session = args.session
-    if not session:
-        sd = default_sessions_dir(args.profile)
-        if not sd:
-            sys.exit(
-                f"error: could not find Brave Sessions dir for profile {args.profile!r}"
+# rich styles for each Chromium group color
+RICH_STYLE = {
+    "grey": "grey50",
+    "blue": "blue",
+    "red": "red",
+    "yellow": "yellow",
+    "green": "green",
+    "pink": "magenta",
+    "purple": "medium_purple",
+    "cyan": "cyan",
+    "orange": "dark_orange",
+}
+
+
+class Format(StrEnum):
+    md = "md"
+    json = "json"
+    html = "html"
+    csv = "csv"
+    all = "all"
+
+
+# rich Console for status/summary; goes to stderr so stdout stays pipeable.
+err = Console(stderr=True)
+
+
+def load_session(profile: str, session: Path | None) -> tuple[Path, bytes]:
+    """Resolve the session file and return (path, raw bytes), copying it first
+    so a running Brave can't truncate the file mid-read."""
+    if session is None:
+        sessions_dir = default_sessions_dir(profile)
+        if not sessions_dir:
+            err.print(
+                f"[red]error:[/] could not find Brave Sessions dir for profile "
+                f"[bold]{profile!r}[/]"
             )
-        session = newest_session_file(sd)
-        if not session:
-            sys.exit(f"error: no Session_* files in {sd}")
+            raise typer.Exit(1)
+        newest = newest_session_file(sessions_dir)
+        if not newest:
+            err.print(f"[red]error:[/] no Session_* files in {sessions_dir}")
+            raise typer.Exit(1)
+        session = Path(newest)
 
-    # copy first so a running Brave can't truncate mid-read
     with tempfile.NamedTemporaryFile(delete=False, suffix=".snss") as tmp:
         shutil.copyfile(session, tmp.name)
         tmp_path = tmp.name
     try:
-        data = open(tmp_path, "rb").read()
+        return session, Path(tmp_path).read_bytes()
     finally:
         os.unlink(tmp_path)
 
-    d = parse(data)
-    sys.stderr.write(
-        f"parsed {os.path.basename(session)}: "
-        f"{d['group_count']} groups / {d['tab_count']} tabs\n"
+
+def print_summary(d: dict, session_path: Path) -> None:
+    table = Table(
+        title=f"Brave Tab Groups — {d['group_count']} groups, {d['tab_count']} tabs",
+        title_style="bold",
+        header_style="bold",
+        border_style="grey39",
     )
+    table.add_column("#", justify="right", style="grey50")
+    table.add_column("group")
+    table.add_column("color")
+    table.add_column("tabs", justify="right")
+    for i, g in enumerate(d["groups"], 1):
+        style = RICH_STYLE.get(g["color"], "white")
+        name = Text(g["name"] or "(untitled)", style=style)
+        chip = Text("● ", style=style) + Text(g["color"], style="grey50")
+        table.add_row(str(i), name, chip, str(len(g["tabs"])))
+    err.print(table)
+    err.print(f"[grey50]source:[/] {session_path}")
 
-    single = args.format
-    if single in ("md", "html"):
-        sys.stdout.write(render_md(d) if single == "md" else render_html(d))
-        return
-    if single == "json":
-        json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
-        return
-    if single == "csv":
-        render_csv(d, sys.stdout)
-        return
 
-    # all -> files
-    os.makedirs(args.out_dir, exist_ok=True)
-    with open(os.path.join(args.out_dir, "tabgroups.md"), "w", encoding="utf-8") as f:
-        f.write(render_md(d))
-    with open(os.path.join(args.out_dir, "tabgroups.json"), "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(args.out_dir, "tabgroups.html"), "w", encoding="utf-8") as f:
-        f.write(render_html(d))
-    with open(
-        os.path.join(args.out_dir, "tabgroups.csv"), "w", encoding="utf-8", newline=""
-    ) as f:
+def write_all(d: dict, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "tabgroups.md").write_text(render_md(d), encoding="utf-8")
+    (out_dir / "tabgroups.json").write_text(
+        json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (out_dir / "tabgroups.html").write_text(render_html(d), encoding="utf-8")
+    with (out_dir / "tabgroups.csv").open("w", encoding="utf-8", newline="") as f:
         render_csv(d, f)
-    sys.stderr.write(f"wrote md/json/html/csv into {os.path.abspath(args.out_dir)}/\n")
+    err.print(f"[green]wrote[/] md/json/html/csv into [bold]{out_dir}/[/]")
+
+
+def export(
+    profile: Annotated[str, typer.Option(help="Profile directory name.")] = "Default",
+    session: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="Explicit path to a Session_* file (default: newest in the profile).",
+        ),
+    ] = None,
+    fmt: Annotated[
+        Format,
+        typer.Option("--format", "-f", help="Output format; 'all' writes files."),
+    ] = Format.all,
+    out_dir: Annotated[
+        Path, typer.Option(help="Output directory when --format all.")
+    ] = Path("brave_tabgroups"),
+) -> None:
+    """Export Brave tab groups from the on-disk session file."""
+    session_path, data = load_session(profile, session)
+    try:
+        d = parse(data)
+    except ValueError as e:
+        err.print(f"[red]error:[/] {e}")
+        raise typer.Exit(1) from e
+
+    print_summary(d, session_path)
+
+    if fmt is Format.all:
+        write_all(d, out_dir)
+    elif fmt is Format.json:
+        json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
+    elif fmt is Format.csv:
+        render_csv(d, sys.stdout)
+    elif fmt is Format.md:
+        sys.stdout.write(render_md(d))
+    elif fmt is Format.html:
+        sys.stdout.write(render_html(d))
+
+
+def main() -> None:
+    typer.run(export)
 
 
 if __name__ == "__main__":
