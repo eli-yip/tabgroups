@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Eli Yip", email = "yezi.2022@outlook.com" }
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.14"
 dependencies = []
 
 [project.scripts]
@@ -15,3 +15,9 @@ brave-tabgroups = "brave_tabgroups:main"
 [build-system]
 requires = ["uv_build>=0.11.21,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.10",
+    "ty>=0.0.29",
+]
