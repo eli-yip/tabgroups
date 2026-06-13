@@ -62,12 +62,8 @@ format stays clean.
 Cross-platform: **macOS, Linux, and Windows**. Profile locations for each
 browser are detected automatically. (Developed and tested on macOS.)
 
-## Privacy
-
-Everything runs locally — nothing is ever uploaded. Note that exported files
-contain your **real browsing history**, so don't share them carelessly. The
-output folder and `tabgroups.*` files are git-ignored to prevent accidental
-commits.
+Runs fully offline; exports contain your real browsing history (the output
+folder is git-ignored, so you won't commit it by accident).
 
 ## License
 
