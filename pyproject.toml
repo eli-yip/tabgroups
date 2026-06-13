@@ -1,8 +1,10 @@
 [project]
 name = "brave-tabgroups"
 version = "0.1.0"
-description = "Export Brave (Chromium) tab groups from the on-disk SNSS session file"
+description = "Export Chromium browser tab groups from the on-disk SNSS session file"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Eli Yip", email = "yezi.2022@outlook.com" }
 ]

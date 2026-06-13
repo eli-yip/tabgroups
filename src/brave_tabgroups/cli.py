@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Export all Brave (Chromium) tab groups from the on-disk session file.
+Export tab groups from a Chromium-based browser's on-disk session file.
 
-Reads Brave's SNSS session log directly — no need for Brave to expose anything,
-but Brave should ideally be CLOSED (or at least idle) so the latest session file
-is fully flushed. The script copies the session file before parsing, so it is
-safe to run while Brave is open; it just reflects the last flushed state.
+Reads the browser's SNSS session log directly — no extension or API needed.
+Works with Brave, Chrome, Chromium, Edge, and Vivaldi (they share the format).
+The browser should ideally be CLOSED (or idle) so the latest session file is
+fully flushed; the file is copied before parsing, so it is safe to run while the
+browser is open — it just reflects the last flushed state.
 
 Usage:
-    uv run brave-tabgroups                      # md + json + html + csv into ./brave_tabgroups/
+    uv run brave-tabgroups                      # tree+files for Brave's Default profile
+    uv run brave-tabgroups --browser chrome     # Chrome instead of Brave
+    uv run brave-tabgroups --format tree        # expand groups in the terminal
     uv run brave-tabgroups --format md          # only markdown to stdout
     uv run brave-tabgroups --profile "Profile 1"
     uv run brave-tabgroups --session /path/to/Session_xxx
     uv run brave-tabgroups --out-dir ~/Desktop/export --format all
 
-Formats: md, json, html, csv, all. A rich summary table is always printed to
-stderr; the chosen format goes to stdout (or files for --format all).
+Formats: tree, md, json, html, csv, all. A rich summary table is always printed
+to stderr; the chosen format goes to stdout (or files for --format all).
 """
 
 import csv
@@ -61,29 +64,63 @@ CMD_SET_TAB_GROUP = 25
 CMD_SET_TAB_GROUP_METADATA2 = 27
 
 
-def default_sessions_dir(profile):
-    home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(
-            home,
-            "Library/Application Support/BraveSoftware/Brave-Browser",
-            profile,
-            "Sessions",
-        ),  # macOS
-        os.path.join(
-            home, ".config/BraveSoftware/Brave-Browser", profile, "Sessions"
-        ),  # Linux
-        os.path.join(
-            home,
-            "AppData/Local/BraveSoftware/Brave-Browser/User Data",
-            profile,
-            "Sessions",
-        ),  # Windows
-    ]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    return None
+if sys.platform == "darwin":
+    _PLAT = "mac"
+elif os.name == "nt":
+    _PLAT = "win"
+else:
+    _PLAT = "linux"
+
+# User-data directory for each Chromium-based browser, relative to $HOME.
+# They all share the SNSS session format, so the same parser works for all.
+BROWSERS = {
+    "brave": {
+        "mac": "Library/Application Support/BraveSoftware/Brave-Browser",
+        "linux": ".config/BraveSoftware/Brave-Browser",
+        "win": "AppData/Local/BraveSoftware/Brave-Browser/User Data",
+    },
+    "chrome": {
+        "mac": "Library/Application Support/Google/Chrome",
+        "linux": ".config/google-chrome",
+        "win": "AppData/Local/Google/Chrome/User Data",
+    },
+    "chromium": {
+        "mac": "Library/Application Support/Chromium",
+        "linux": ".config/chromium",
+        "win": "AppData/Local/Chromium/User Data",
+    },
+    "edge": {
+        "mac": "Library/Application Support/Microsoft Edge",
+        "linux": ".config/microsoft-edge",
+        "win": "AppData/Local/Microsoft/Edge/User Data",
+    },
+    "vivaldi": {
+        "mac": "Library/Application Support/Vivaldi",
+        "linux": ".config/vivaldi",
+        "win": "AppData/Local/Vivaldi/User Data",
+    },
+}
+
+
+def user_data_dir(browser):
+    return os.path.join(os.path.expanduser("~"), BROWSERS[browser][_PLAT])
+
+
+def list_profiles(browser):
+    """Profile directory names that actually contain a Sessions/ folder."""
+    base = user_data_dir(browser)
+    if not os.path.isdir(base):
+        return []
+    profiles = []
+    for entry in sorted(os.listdir(base)):
+        if os.path.isdir(os.path.join(base, entry, "Sessions")):
+            profiles.append(entry)
+    return profiles
+
+
+def default_sessions_dir(browser, profile):
+    d = os.path.join(user_data_dir(browser), profile, "Sessions")
+    return d if os.path.isdir(d) else None
 
 
 def newest_session_file(sessions_dir):
@@ -255,8 +292,13 @@ def parse(data):
 # ---------- renderers ----------
 
 
+def _title(d):
+    b = d.get("browser")
+    return f"{b.capitalize()} Tab Groups" if b else "Tab Groups"
+
+
 def render_md(d):
-    out = [f"# Brave Tab Groups — {d['group_count']} groups, {d['tab_count']} tabs\n"]
+    out = [f"# {_title(d)} — {d['group_count']} groups, {d['tab_count']} tabs\n"]
     for i, g in enumerate(d["groups"], 1):
         name = g["name"] or "(untitled)"
         out.append(f"## {i}. {name}  `[{g['color']}]`  · {len(g['tabs'])} tabs\n")
@@ -270,13 +312,13 @@ def render_md(d):
 def render_html(d):
     parts = [
         "<!DOCTYPE html><html><head><meta charset='utf-8'>",
-        "<title>Brave Tab Groups</title><style>",
+        f"<title>{_title(d)}</title><style>",
         "body{font:14px/1.5 -apple-system,system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem}",
         "h1{font-size:1.4rem}h2{margin-top:1.6rem;font-size:1.05rem;border-bottom:1px solid #ddd;padding-bottom:.3rem}",
         ".chip{display:inline-block;width:.7em;height:.7em;border-radius:50%;margin-right:.4em;vertical-align:middle}",
         "ul{padding-left:1.2rem}a{text-decoration:none;color:#1a56db}a:hover{text-decoration:underline}",
         ".count{color:#888;font-weight:normal;font-size:.85em}</style></head><body>",
-        f"<h1>Brave Tab Groups — {d['group_count']} groups, {d['tab_count']} tabs</h1>",
+        f"<h1>{_title(d)} — {d['group_count']} groups, {d['tab_count']} tabs</h1>",
     ]
     css_color = {
         "grey": "#9aa0a6",
@@ -315,7 +357,7 @@ def render_csv(d, fh):
 
 def render_tree(d, console):
     root = Tree(
-        Text("Brave Tab Groups", style="bold")
+        Text(_title(d), style="bold")
         + Text(f" — {d['group_count']} groups, {d['tab_count']} tabs", style="grey50")
     )
     for i, g in enumerate(d["groups"], 1):
@@ -353,6 +395,14 @@ RICH_STYLE = {
 }
 
 
+class Browser(StrEnum):
+    brave = "brave"
+    chrome = "chrome"
+    chromium = "chromium"
+    edge = "edge"
+    vivaldi = "vivaldi"
+
+
 class Format(StrEnum):
     tree = "tree"
     md = "md"
@@ -366,16 +416,25 @@ class Format(StrEnum):
 err = Console(stderr=True)
 
 
-def load_session(profile: str, session: Path | None) -> tuple[Path, bytes]:
+def load_session(
+    browser: str, profile: str, session: Path | None
+) -> tuple[Path, bytes]:
     """Resolve the session file and return (path, raw bytes), copying it first
-    so a running Brave can't truncate the file mid-read."""
+    so a running browser can't truncate the file mid-read."""
     if session is None:
-        sessions_dir = default_sessions_dir(profile)
+        sessions_dir = default_sessions_dir(browser, profile)
         if not sessions_dir:
             err.print(
-                f"[red]error:[/] could not find Brave Sessions dir for profile "
+                f"[red]error:[/] no Sessions dir for {browser} profile "
                 f"[bold]{profile!r}[/]"
             )
+            found = list_profiles(browser)
+            if found:
+                err.print(f"available profiles: {', '.join(found)}")
+            else:
+                err.print(
+                    f"is {browser} installed? looked under {user_data_dir(browser)}"
+                )
             raise typer.Exit(1)
         newest = newest_session_file(sessions_dir)
         if not newest:
@@ -394,7 +453,7 @@ def load_session(profile: str, session: Path | None) -> tuple[Path, bytes]:
 
 def print_summary(d: dict, session_path: Path) -> None:
     table = Table(
-        title=f"Brave Tab Groups — {d['group_count']} groups, {d['tab_count']} tabs",
+        title=f"{_title(d)} — {d['group_count']} groups, {d['tab_count']} tabs",
         title_style="bold",
         header_style="bold",
         border_style="grey39",
@@ -425,6 +484,9 @@ def write_all(d: dict, out_dir: Path) -> None:
 
 
 def export(
+    browser: Annotated[
+        Browser, typer.Option("--browser", "-b", help="Chromium-based browser.")
+    ] = Browser.brave,
     profile: Annotated[str, typer.Option(help="Profile directory name.")] = "Default",
     session: Annotated[
         Path | None,
@@ -444,15 +506,16 @@ def export(
     ] = Format.all,
     out_dir: Annotated[
         Path, typer.Option(help="Output directory when --format all.")
-    ] = Path("brave_tabgroups"),
+    ] = Path("tabgroups"),
 ) -> None:
-    """Export Brave tab groups from the on-disk session file."""
-    session_path, data = load_session(profile, session)
+    """Export tab groups from a Chromium browser's on-disk session file."""
+    session_path, data = load_session(browser, profile, session)
     try:
         d = parse(data)
     except ValueError as e:
         err.print(f"[red]error:[/] {e}")
         raise typer.Exit(1) from e
+    d["browser"] = browser.value
 
     # the tree already shows per-group counts, so skip the summary table for it
     if fmt is not Format.tree:

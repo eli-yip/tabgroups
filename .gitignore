@@ -9,6 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# tool output
+# exported tab-group data (contains your real browsing history — never commit)
+/tabgroups/
 /brave_tabgroups/
+tabgroups.md
+tabgroups.json
+tabgroups.html
+tabgroups.csv
 *.snss
