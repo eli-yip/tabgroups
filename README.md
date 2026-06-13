@@ -1,79 +1,73 @@
-# brave-tabgroups
+# tabgroups-export
 
-Export all your **Chromium tab groups** straight from the browser's on-disk
-session file — no extension, no browser API, works offline. Defaults to Brave;
-also supports **Chrome, Chromium, Edge, and Vivaldi** (`--browser`).
+> [中文文档](README.zh.md)
 
-It parses the `SNSS` session log directly and emits each tab group (name, color)
-with all its tabs (title + URL) as a terminal tree, Markdown, HTML, JSON, or CSV.
+Export your browser's **tab groups** — every group and the tabs inside it — to a
+terminal tree, Markdown, HTML, JSON, or CSV.
 
-## How it works
+No extension, no sign-in, fully offline. It reads the browser's own session file
+on disk. Works with **Brave, Chrome, Chromium, Edge, and Vivaldi**.
 
-Chromium browsers store the live window/tab state — including tab groups — as an
-append-only binary log under the profile's `Sessions/` directory
-(`Session_*` files, the SNSS format). This tool reads the newest session file,
-decodes the relevant commands (tab-group metadata, tab→group assignment, tab
-navigations) and renders a snapshot.
+## Quick start
 
-The session file is **copied before parsing**, so it is safe to run while the
-browser is open. For the most complete and clean state, **fully quit the browser
-first** so it flushes a final snapshot.
+Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.14.
+
+```bash
+git clone <repo-url> && cd tabgroups-export
+
+# pretty tree in your terminal (clickable titles)
+uv run tabgroups-export --format tree
+
+# export every format into ./tabgroups/
+uv run tabgroups-export
+```
+
+> **Tip:** quit the browser first for a complete, up-to-date export. Running
+> while it's open is safe, but only shows the last saved state.
 
 ## Usage
 
 ```bash
-# expand every group as a tree in the terminal (clickable titles)
-uv run brave-tabgroups --format tree
+# a different browser / profile
+uv run tabgroups-export --browser chrome
+uv run tabgroups-export --profile "Profile 1"
 
-# all file formats into ./tabgroups/
-uv run brave-tabgroups
+# a single format to stdout (pipe it anywhere)
+uv run tabgroups-export --format md > tabs.md
+uv run tabgroups-export --format html > tabs.html
 
-# a different browser
-uv run brave-tabgroups --browser chrome
-uv run brave-tabgroups -b edge -f tree
-
-# a single format to stdout
-uv run brave-tabgroups --format md
-uv run brave-tabgroups --format html > tabs.html
-
-# a different profile, or an explicit session file
-uv run brave-tabgroups --profile "Profile 1"
-uv run brave-tabgroups --session ~/path/to/Session_123456
-
-# choose output dir for --format all
-uv run brave-tabgroups --out-dir ~/Desktop/export
+# point at a specific session file, or change the output folder
+uv run tabgroups-export --session /path/to/Session_123456
+uv run tabgroups-export --out-dir ~/Desktop/export
 ```
 
-If a profile isn't found, the error lists the profiles that actually exist for
-that browser.
+If a profile isn't found, the error lists the profiles you actually have.
 
-### Options
+## Options
 
-| flag | default | meaning |
-|------|---------|---------|
-| `--browser` / `-b` | `brave` | `brave` \| `chrome` \| `chromium` \| `edge` \| `vivaldi` |
-| `--profile` | `Default` | profile directory name |
-| `--session` | (auto) | explicit path to a `Session_*` file |
-| `--format` / `-f` | `all` | `tree` \| `md` \| `json` \| `html` \| `csv` \| `all` |
-| `--out-dir` | `tabgroups` | output directory when `--format all` |
+| flag | default | description |
+|------|---------|-------------|
+| `--browser`, `-b` | `brave` | `brave` · `chrome` · `chromium` · `edge` · `vivaldi` |
+| `--profile` | `Default` | profile directory name (e.g. `"Profile 1"`) |
+| `--format`, `-f` | `all` | `tree` · `md` · `json` · `html` · `csv` · `all` |
+| `--session` | newest | path to a specific `Session_*` file |
+| `--out-dir` | `tabgroups` | output folder for `--format all` |
 
-`--format all` writes files; any single format prints to stdout. A colored
-summary table (group name, color, tab count) is always printed to stderr, so it
-stays out of the way when you pipe a single format.
+`all` writes four files to the output folder; any single format prints to
+stdout. A colored summary table is always shown (on stderr), so piping a single
+format stays clean.
 
-## Supported platforms
+## Platforms
 
-Auto-detects browser profile paths on macOS, Linux, and Windows. Built with
-[`typer`](https://typer.tiangolo.com/) and [`rich`](https://rich.readthedocs.io/),
-Python ≥ 3.14.
+Cross-platform: **macOS, Linux, and Windows**. Profile locations for each
+browser are detected automatically. (Developed and tested on macOS.)
 
-## Caveats
+## Privacy
 
-- The SNSS log is append-only; this reflects the **last flushed** state. Quit
-  the browser for a guaranteed-complete export.
-- Reads only the browser's own storage on your machine; nothing is sent anywhere.
-- Exports contain your real browsing history — `tabgroups/` and `tabgroups.*`
-  are git-ignored so you don't commit them by accident.
+Everything runs locally — nothing is ever uploaded. Note that exported files
+contain your **real browsing history**, so don't share them carelessly. The
+output folder and `tabgroups.*` files are git-ignored to prevent accidental
+commits.
 
 ## License
 

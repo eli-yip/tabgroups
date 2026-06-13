@@ -2,7 +2,7 @@ current_branch := shell("git branch --show-current")
 
 [group('service')]
 run *ARGS:
-    uv run brave-tabgroups {{ ARGS }}
+    uv run tabgroups-export {{ ARGS }}
 
 [group('python')]
 update:

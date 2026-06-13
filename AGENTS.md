@@ -1,7 +1,8 @@
 # AGENTS.md
 
-`brave-tabgroups` is a small, single-purpose CLI: it parses Brave's on-disk
-SNSS session log and exports tab groups to md/json/html/csv. Keep it simple.
+`tabgroups-export` is a small, single-purpose CLI: it parses a Chromium
+browser's on-disk SNSS session log and exports tab groups to a terminal tree /
+md / json / html / csv. Keep it simple.
 
 ## Conventions
 

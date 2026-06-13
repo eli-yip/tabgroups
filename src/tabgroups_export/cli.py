@@ -9,13 +9,13 @@ fully flushed; the file is copied before parsing, so it is safe to run while the
 browser is open — it just reflects the last flushed state.
 
 Usage:
-    uv run brave-tabgroups                      # tree+files for Brave's Default profile
-    uv run brave-tabgroups --browser chrome     # Chrome instead of Brave
-    uv run brave-tabgroups --format tree        # expand groups in the terminal
-    uv run brave-tabgroups --format md          # only markdown to stdout
-    uv run brave-tabgroups --profile "Profile 1"
-    uv run brave-tabgroups --session /path/to/Session_xxx
-    uv run brave-tabgroups --out-dir ~/Desktop/export --format all
+    uv run tabgroups-export                      # files for Brave's Default profile
+    uv run tabgroups-export --browser chrome     # Chrome instead of Brave
+    uv run tabgroups-export --format tree        # expand groups in the terminal
+    uv run tabgroups-export --format md          # only markdown to stdout
+    uv run tabgroups-export --profile "Profile 1"
+    uv run tabgroups-export --session /path/to/Session_xxx
+    uv run tabgroups-export --out-dir ~/Desktop/export --format all
 
 Formats: tree, md, json, html, csv, all. A rich summary table is always printed
 to stderr; the chosen format goes to stdout (or files for --format all).
