@@ -61,7 +61,7 @@ uv run tabgroups-export --out-dir ~/Desktop/export
 跨平台：**macOS、Linux、Windows**。各浏览器的 profile 位置会自动探测。
 （在 macOS 上开发与测试。）
 
-完全离线运行；导出的文件包含你真实的浏览历史（输出目录已被 git 忽略，不会误提交）。
+完全离线运行；导出的文件包含你真实的浏览历史。
 
 ## 许可证
 

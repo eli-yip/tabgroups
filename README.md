@@ -62,8 +62,7 @@ format stays clean.
 Cross-platform: **macOS, Linux, and Windows**. Profile locations for each
 browser are detected automatically. (Developed and tested on macOS.)
 
-Runs fully offline; exports contain your real browsing history (the output
-folder is git-ignored, so you won't commit it by accident).
+Runs fully offline; exports contain your real browsing history.
 
 ## License
 
