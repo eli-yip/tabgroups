@@ -1,0 +1,6 @@
+# Copy to config.toml and fill in. Each value can also be set via a TABGROUPS_*
+# environment variable (TABGROUPS_BASE_URL / TABGROUPS_API_KEY / TABGROUPS_MODEL), which takes
+# precedence over this file. These three are the only settings.
+base_url = "https://api.openai.com/v1"   # OpenAI-compatible endpoint
+api_key  = "sk-..."                       # prefer TABGROUPS_API_KEY in your shell
+model    = "gpt-4o-mini"

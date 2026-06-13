@@ -8,7 +8,7 @@ point**:
 - `export` — parse the session file and write the groups as a terminal tree /
   md / json / html / csv.
 - `classify` — re-group an export by topic with an LLM (OpenAI-compatible
-  endpoint), in a `discover` + `run` two-step flow.
+  endpoint), in a `discover` + `apply` two-step flow.
 
 Keep it simple. Add new capabilities as subcommands of `tabgroups`, not as
 separate binaries.
@@ -72,7 +72,7 @@ just fix-lint    # auto-fix formatting and lint issues
 ```
 
 There is no test suite yet; verify changes by running the relevant subcommand
-against real data (`just run --format md`). Add **targeted** tests when a change
+against real data (`just run export --format md`). Add **targeted** tests when a change
 is hard to verify by hand (e.g. the SNSS parser, the classify integrity guard);
 don't add a heavyweight suite this tool doesn't need.
 

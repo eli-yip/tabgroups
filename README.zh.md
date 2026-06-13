@@ -1,4 +1,4 @@
-# tabgroups-export
+# tabgroups
 
 > [English](README.md)
 
@@ -13,13 +13,13 @@ Markdown、HTML、JSON 或 CSV。
 需要 [uv](https://docs.astral.sh/uv/) 和 Python ≥ 3.14。
 
 ```bash
-git clone <repo-url> && cd tabgroups-export
+git clone <repo-url> && cd tabgroups
 
 # 在终端里展开成树状图（标题可点击）
-uv run tabgroups-export --format tree
+uv run tabgroups export --format tree
 
 # 导出全部格式到 ./tabgroups/
-uv run tabgroups-export
+uv run tabgroups export
 ```
 
 > **提示：** 想要完整、最新的导出，先退出浏览器。浏览器开着时运行也安全，
@@ -29,16 +29,16 @@ uv run tabgroups-export
 
 ```bash
 # 指定浏览器 / 配置文件（profile）
-uv run tabgroups-export --browser chrome
-uv run tabgroups-export --profile "Profile 1"
+uv run tabgroups export --browser chrome
+uv run tabgroups export --profile "Profile 1"
 
 # 单一格式输出到 stdout（可任意管道处理）
-uv run tabgroups-export --format md > tabs.md
-uv run tabgroups-export --format html > tabs.html
+uv run tabgroups export --format md > tabs.md
+uv run tabgroups export --format html > tabs.html
 
 # 指定具体的会话文件，或更改输出目录
-uv run tabgroups-export --session /path/to/Session_123456
-uv run tabgroups-export --out-dir ~/Desktop/export
+uv run tabgroups export --session /path/to/Session_123456
+uv run tabgroups export --out-dir ~/Desktop/export
 ```
 
 如果找不到指定的 profile，报错会列出你实际拥有的 profile。
@@ -55,6 +55,33 @@ uv run tabgroups-export --out-dir ~/Desktop/export
 
 `all` 会向输出目录写入四个文件；任何单一格式则打印到 stdout。摘要彩色表格始终
 显示（在 stderr 上），因此用管道导出单一格式时输出依然干净。
+
+## 按主题分类（LLM）
+
+「稍后读」分组往往只是按时间堆叠的标签。`tabgroups classify` 用任意
+OpenAI 兼容接口，把导出的 `tabgroups.json` 按**主题**重新归类，分两步进行，
+分类标准始终由你掌控：
+
+```bash
+# 1. 从你的标签里提出一份主题列表 → 可编辑的 topics.toml
+uv run tabgroups classify discover tabgroups/tabgroups.json -o topics.toml
+
+# 2. ……手动修改 topics.toml（增删/合并主题、细化每条描述）……
+
+# 3. 按这份主题分类每个标签（外加一个 “unclassified” 未分类栏）
+uv run tabgroups classify apply tabgroups/tabgroups.json -t topics.toml -f md
+```
+
+输出格式与导出一致：`tree · md · json · html · csv · all`。
+
+通过 `config.toml`（见 [`config.example.toml`](config.example.toml)）或 `TABGROUPS_*`
+环境变量（`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`）配置接口，环境变量优先：
+
+```toml
+base_url = "https://api.openai.com/v1"
+api_key  = "sk-..."        # 也可在 shell 里设 TABGROUPS_API_KEY
+model    = "gpt-4o-mini"
+```
 
 ## 平台
 
