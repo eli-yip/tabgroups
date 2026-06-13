@@ -36,6 +36,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+from rich.tree import Tree
 
 # Chromium tab_groups::TabGroupColorId order
 COLORS = {
@@ -312,6 +313,30 @@ def render_csv(d, fh):
             w.writerow([g["name"], g["color"], t["title"], t["url"]])
 
 
+def render_tree(d, console):
+    root = Tree(
+        Text("Brave Tab Groups", style="bold")
+        + Text(f" — {d['group_count']} groups, {d['tab_count']} tabs", style="grey50")
+    )
+    for i, g in enumerate(d["groups"], 1):
+        style = RICH_STYLE.get(g["color"], "white")
+        label = (
+            Text(f"{i}. ", style="grey50")
+            + Text("● ", style=style)
+            + Text(g["name"] or "(untitled)", style=style)
+            + Text(f"  [{g['color']}] · {len(g['tabs'])}", style="grey50")
+        )
+        branch = root.add(label)
+        for t in g["tabs"]:
+            title = t["title"] or "(no title)"
+            # clickable title (OSC 8 hyperlink) + dimmed url
+            leaf = Text(title, style=f"link {t['url']}") + Text(
+                f"  {t['url']}", style="grey39"
+            )
+            branch.add(leaf)
+    console.print(root)
+
+
 # ---------- CLI ----------
 
 # rich styles for each Chromium group color
@@ -329,6 +354,7 @@ RICH_STYLE = {
 
 
 class Format(StrEnum):
+    tree = "tree"
     md = "md"
     json = "json"
     html = "html"
@@ -410,7 +436,11 @@ def export(
     ] = None,
     fmt: Annotated[
         Format,
-        typer.Option("--format", "-f", help="Output format; 'all' writes files."),
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output format; 'tree' draws a terminal tree, 'all' writes files.",
+        ),
     ] = Format.all,
     out_dir: Annotated[
         Path, typer.Option(help="Output directory when --format all.")
@@ -424,9 +454,13 @@ def export(
         err.print(f"[red]error:[/] {e}")
         raise typer.Exit(1) from e
 
-    print_summary(d, session_path)
+    # the tree already shows per-group counts, so skip the summary table for it
+    if fmt is not Format.tree:
+        print_summary(d, session_path)
 
-    if fmt is Format.all:
+    if fmt is Format.tree:
+        render_tree(d, Console())
+    elif fmt is Format.all:
         write_all(d, out_dir)
     elif fmt is Format.json:
         json.dump(d, sys.stdout, ensure_ascii=False, indent=2)

@@ -21,7 +21,10 @@ flushes a final snapshot.
 ## Usage
 
 ```bash
-# all four formats into ./brave_tabgroups/
+# expand every group as a tree in the terminal (clickable titles)
+uv run brave-tabgroups --format tree
+
+# all four file formats into ./brave_tabgroups/
 uv run brave-tabgroups
 
 # a single format to stdout
@@ -42,7 +45,7 @@ uv run brave-tabgroups --out-dir ~/Desktop/export
 |------|---------|---------|
 | `--profile` | `Default` | profile directory name |
 | `--session` | (auto) | explicit path to a `Session_*` file |
-| `--format`  | `all` | `md` \| `json` \| `html` \| `csv` \| `all` |
+| `--format`  | `all` | `tree` \| `md` \| `json` \| `html` \| `csv` \| `all` |
 | `--out-dir` | `brave_tabgroups` | output directory when `--format all` |
 
 `--format all` writes files; any single format prints to stdout. A colored
