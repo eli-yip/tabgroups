@@ -3,17 +3,18 @@
 > [中文文档](README.zh.md)
 
 Export your browser's **tab groups** — every group and the tabs inside it — to a
-terminal tree, Markdown, HTML, JSON, or CSV.
+terminal tree, Markdown, HTML, JSON, or CSV, and optionally re-group them by topic
+with an LLM.
 
-No extension, no sign-in, fully offline. It reads the browser's own session file
-on disk. Works with **Brave, Chrome, Chromium, Edge, and Vivaldi**.
+No extension, no sign-in; export runs fully offline. Works with **Brave, Chrome,
+Chromium, Edge, and Vivaldi**.
 
 ## Quick start
 
 Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.14.
 
 ```bash
-git clone <repo-url> && cd tabgroups
+git clone https://github.com/eli-yip/tabgroups && cd tabgroups
 
 # pretty tree in your terminal (clickable titles)
 uv run tabgroups export --format tree
@@ -41,8 +42,6 @@ uv run tabgroups export --session /path/to/Session_123456
 uv run tabgroups export --out-dir ~/Desktop/export
 ```
 
-If a profile isn't found, the error lists the profiles you actually have.
-
 ## Options
 
 | flag | default | description |
@@ -53,15 +52,13 @@ If a profile isn't found, the error lists the profiles you actually have.
 | `--session` | newest | path to a specific `Session_*` file |
 | `--out-dir` | `tabgroups` | output folder for `--format all` |
 
-`all` writes four files to the output folder; any single format prints to
-stdout. A colored summary table is always shown (on stderr), so piping a single
-format stays clean.
+`all` writes four files to the output folder; any single format prints to stdout.
 
 ## Classify by topic (LLM)
 
-Your "read later" groups are often just time-ordered dumps. `tabgroups classify`
-re-groups an exported `tabgroups.json` by **topic**, using any OpenAI-compatible
-endpoint, in two steps so you stay in control of the taxonomy:
+"Read later" groups are often just time-ordered dumps. `tabgroups classify`
+re-groups an export by **topic** with an LLM, in two steps so you stay in control
+of the taxonomy:
 
 ```bash
 # 1. propose a topic list from your tabs → editable topics.toml
@@ -75,7 +72,7 @@ uv run tabgroups classify apply tabgroups/tabgroups.json -t topics.toml -f md
 
 Output uses the same `tree · md · json · html · csv · all` formats as the export.
 
-Configure the endpoint via `config.toml` (see
+Point it at any OpenAI-compatible endpoint via `config.toml` (see
 [`config.example.toml`](config.example.toml)) or `TABGROUPS_*` environment variables
 (`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`), which take precedence:
 
@@ -87,10 +84,11 @@ model    = "gpt-4o-mini"
 
 ## Platforms
 
-Cross-platform: **macOS, Linux, and Windows**. Profile locations for each
-browser are detected automatically. (Developed and tested on macOS.)
+Works on **macOS, Linux, and Windows**; primarily tested on macOS.
 
-Runs fully offline; exports contain your real browsing history.
+Export runs locally and uploads nothing; `classify` sends each tab's title and
+domain to the LLM endpoint you configure. Exported files contain your real
+browsing history.
 
 ## License
 

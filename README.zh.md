@@ -3,9 +3,9 @@
 > [English](README.md)
 
 把浏览器的**标签页分组**——每个分组及其中的所有标签——导出成终端树状图、
-Markdown、HTML、JSON 或 CSV。
+Markdown、HTML、JSON 或 CSV，还能用 LLM 按主题重新归类。
 
-无需插件、无需登录、完全离线。直接读取浏览器本地的会话文件。支持
+无需插件、无需登录；导出完全离线。支持
 **Brave、Chrome、Chromium、Edge、Vivaldi**。
 
 ## 快速开始
@@ -13,7 +13,7 @@ Markdown、HTML、JSON 或 CSV。
 需要 [uv](https://docs.astral.sh/uv/) 和 Python ≥ 3.14。
 
 ```bash
-git clone <repo-url> && cd tabgroups
+git clone https://github.com/eli-yip/tabgroups && cd tabgroups
 
 # 在终端里展开成树状图（标题可点击）
 uv run tabgroups export --format tree
@@ -41,8 +41,6 @@ uv run tabgroups export --session /path/to/Session_123456
 uv run tabgroups export --out-dir ~/Desktop/export
 ```
 
-如果找不到指定的 profile，报错会列出你实际拥有的 profile。
-
 ## 选项
 
 | 参数 | 默认值 | 说明 |
@@ -53,14 +51,12 @@ uv run tabgroups export --out-dir ~/Desktop/export
 | `--session` | 最新 | 指定某个 `Session_*` 文件的路径 |
 | `--out-dir` | `tabgroups` | `--format all` 时的输出目录 |
 
-`all` 会向输出目录写入四个文件；任何单一格式则打印到 stdout。摘要彩色表格始终
-显示（在 stderr 上），因此用管道导出单一格式时输出依然干净。
+`all` 会向输出目录写入四个文件；单一格式则打印到标准输出。
 
 ## 按主题分类（LLM）
 
-「稍后读」分组往往只是按时间堆叠的标签。`tabgroups classify` 用任意
-OpenAI 兼容接口，把导出的 `tabgroups.json` 按**主题**重新归类，分两步进行，
-分类标准始终由你掌控：
+「稍后读」分组往往只是按时间堆叠的标签。`tabgroups classify` 用 LLM 把导出
+按**主题**重新归类，分两步进行，分类标准始终由你掌控：
 
 ```bash
 # 1. 从你的标签里提出一份主题列表 → 可编辑的 topics.toml
@@ -75,7 +71,8 @@ uv run tabgroups classify apply tabgroups/tabgroups.json -t topics.toml -f md
 输出格式与导出一致：`tree · md · json · html · csv · all`。
 
 通过 `config.toml`（见 [`config.example.toml`](config.example.toml)）或 `TABGROUPS_*`
-环境变量（`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`）配置接口，环境变量优先：
+环境变量（`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`）指向任一
+OpenAI 兼容接口，环境变量优先：
 
 ```toml
 base_url = "https://api.openai.com/v1"
@@ -85,10 +82,10 @@ model    = "gpt-4o-mini"
 
 ## 平台
 
-跨平台：**macOS、Linux、Windows**。各浏览器的 profile 位置会自动探测。
-（在 macOS 上开发与测试。）
+支持 **macOS、Linux、Windows**，主要在 macOS 上测试。
 
-完全离线运行；导出的文件包含你真实的浏览历史。
+导出完全在本地完成，不上传任何数据；`classify` 会把标签的标题和域名发送到你
+配置的 LLM 接口。导出的文件包含你真实的浏览历史。
 
 ## 许可证
 
