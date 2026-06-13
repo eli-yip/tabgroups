@@ -1,0 +1,608 @@
+#!/usr/bin/env python3
+"""
+LLM-based topical classification for an exported tab-groups JSON file.
+
+Two phases:
+
+    tabgroups classify discover tabgroups/tabgroups.json -o topics.toml
+    # ...edit topics.toml by hand (rename/merge topics, refine descriptions)...
+    tabgroups classify apply tabgroups/tabgroups.json --topics topics.toml -f md
+
+`discover` asks the model to propose a set of English topics from every tab's
+title + main domain. `apply` assigns each tab to exactly one of those topics (or
+to an `unclassified` bucket) and re-renders the result with the same md/json/
+html/csv/tree renderers used by the exporter.
+
+Hallucination guard: the model only ever sees `id + title + domain`. URLs are
+restored from the original export by id, and `apply` asserts that the set of URLs
+it emits is exactly the set it read — no fabricated or dropped links.
+
+Config (any-llm, OpenAI-compatible endpoint) comes from a TOML file and/or
+`TABGROUPS_*` environment variables, env taking precedence:
+
+    # config.toml
+    base_url = "https://api.example.com/v1"
+    api_key  = "sk-..."          # may also be set via TABGROUPS_API_KEY
+    model    = "gpt-4o-mini"
+"""
+
+import asyncio
+import json
+import tomllib
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Annotated, Any, cast
+from urllib.parse import unquote
+
+import any_llm
+import tldextract
+import typer
+from any_llm.types.completion import ChatCompletion
+from pydantic import BaseModel, Field
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+from rich.console import Console
+
+from .render import COLORS, render_csv, render_html, render_md, render_tree
+
+err = Console(stderr=True)
+
+UNCLASSIFIED = "unclassified"
+NOISE = "noise"
+
+# Colors cycled through for topics in the rendered output (skip grey, which is
+# reserved for the unclassified/noise buckets).
+_PALETTE = [c for c in COLORS.values() if c != "grey"]
+
+# Offline TLD extractor: use the bundled public-suffix snapshot, never the
+# network, so domain extraction is deterministic and works without internet.
+_extract = tldextract.TLDExtract(suffix_list_urls=())
+
+# Proxy/archive URL shapes that wrap a real target URL after a marker; we unwrap
+# them so e.g. rss-zero.darkeli.com/api/v1/archive/https://zhihu.com/... is
+# classified by its true source (zhihu.com), not the proxy host.
+_ARCHIVE_MARKERS = ("/api/v1/archive/",)
+
+# Fixed knobs — deliberately NOT user config. config.toml only carries the three
+# credentials (base_url / api_key / model); these are sensible constants.
+_PROVIDER = "openai"  # any-llm provider for the OpenAI-compatible endpoint
+_TEMPERATURE = 0.0  # deterministic classification
+_BATCH_SIZE = 30  # tabs per classification request
+_MAX_RETRIES = 3  # per-call retries before falling back / giving up
+
+
+# ---------- configuration ----------
+
+
+class LLMSettings(BaseSettings):
+    """OpenAI-compatible endpoint settings, from env (`TABGROUPS_*`) and/or TOML.
+
+    The TOML path is taken from `model_config["toml_file"]`; `load_settings`
+    builds a subclass that points it at the chosen config file.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="TABGROUPS_", extra="ignore", toml_file="config.toml"
+    )
+
+    base_url: str
+    api_key: str
+    model: str
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # priority: init kwargs > env > .env > TOML file (from model_config)
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            TomlConfigSettingsSource(settings_cls),
+            file_secret_settings,
+        )
+
+
+def load_settings(config_path: Path) -> LLMSettings:
+    """Build settings reading the given TOML file (env still overrides it)."""
+
+    class _Configured(LLMSettings):
+        model_config = SettingsConfigDict(
+            env_prefix="TABGROUPS_", extra="ignore", toml_file=config_path
+        )
+
+    try:
+        # ty treats the no-default fields as required constructor args; it can't
+        # see that pydantic-settings fills them from env/TOML, so the no-arg call
+        # is flagged. Correct at runtime — ignore just this rule.
+        return _Configured()  # ty: ignore[missing-argument]  # pyright: ignore[reportCallIssue]
+    except Exception as e:  # missing base_url/api_key/model surface here
+        err.print(
+            f"[red]error:[/] incomplete LLM config: {e}\n"
+            f"set base_url/api_key/model in [bold]{config_path}[/] or via "
+            "[bold]TABGROUPS_BASE_URL / TABGROUPS_API_KEY / TABGROUPS_MODEL[/]."
+        )
+        raise typer.Exit(1) from e
+
+
+# ---------- structured models ----------
+
+
+class Topic(BaseModel):
+    name: str = Field(description="Short English topic name.")
+    description: str = Field(
+        default="", description="One-line classification criteria."
+    )
+
+
+class TopicList(BaseModel):
+    topics: list[Topic]
+
+
+class Assignment(BaseModel):
+    id: int
+    topic: str
+
+
+class AssignmentList(BaseModel):
+    assignments: list[Assignment]
+
+
+# ---------- entries / preprocessing ----------
+
+
+class Entry(BaseModel):
+    id: int
+    title: str
+    url: str
+    domain: str
+
+
+def _unwrap(url: str) -> str:
+    """Unwrap an archive/proxy URL to the real target it wraps, if any."""
+    for marker in _ARCHIVE_MARKERS:
+        i = url.find(marker)
+        if i != -1:
+            inner = unquote(url[i + len(marker) :])
+            # some exported links have a mangled scheme like "https:/host/..."
+            inner = inner.replace("https:/", "https://").replace("http:/", "http://")
+            inner = inner.replace("https:///", "https://").replace(
+                "http:///", "http://"
+            )
+            return inner or url
+    return url
+
+
+def main_domain(url: str, *, unwrap: bool = True) -> str:
+    """Registrable domain (eTLD+1) of `url`, optionally unwrapping proxies."""
+    target = _unwrap(url) if unwrap else url
+    ext = _extract(target)
+    return ".".join(p for p in (ext.domain, ext.suffix) if p) or target
+
+
+def _is_noise(title: str, url: str) -> bool:
+    if url.startswith(("chrome://", "edge://", "about:", "brave://")):
+        return True
+    if not url.strip():
+        return True
+    return False
+
+
+def load_entries(
+    export_json: Path, *, unwrap: bool = True
+) -> tuple[list[Entry], list[Entry], int]:
+    """Read the export, dedup by URL, split noise out.
+
+    Returns (classifiable_entries, noise_entries, total_seen). Ids are assigned
+    in first-seen order over the deduped set, so the same input yields the same
+    ids every run.
+    """
+    try:
+        d = json.loads(export_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        err.print(f"[red]error:[/] cannot read export JSON {export_json}: {e}")
+        raise typer.Exit(1) from e
+
+    seen: set[str] = set()
+    classifiable: list[Entry] = []
+    noise: list[Entry] = []
+    total = 0
+    for group in d.get("groups", []):
+        for tab in group.get("tabs", []):
+            url = tab.get("url", "")
+            total += 1
+            if url in seen:
+                continue
+            seen.add(url)
+            title = (tab.get("title") or "").strip()
+            entry = Entry(
+                id=len(classifiable) + len(noise),
+                title=title,
+                url=url,
+                domain=main_domain(url, unwrap=unwrap),
+            )
+            (noise if _is_noise(title, url) else classifiable).append(entry)
+    return classifiable, noise, total
+
+
+# ---------- LLM plumbing ----------
+
+
+def _strip_json(text: str) -> str:
+    """Best-effort extraction of a JSON object from a model reply."""
+    s = text.strip()
+    if s.startswith("```"):
+        s = s.split("```", 2)[1] if "```" in s[3:] else s[3:]
+        s = s.removeprefix("json").strip().removesuffix("```").strip()
+    start, end = s.find("{"), s.rfind("}")
+    return s[start : end + 1] if start != -1 and end != -1 else s
+
+
+async def _acomplete[T: BaseModel](
+    settings: LLMSettings, messages: list[dict[str, Any]], schema: type[T]
+) -> T:
+    """Call the model and return a validated `schema` instance.
+
+    Tries native structured output (response_format=pydantic), then falls back
+    to json_object mode + manual validation for endpoints that lack strict
+    json_schema support. Retries up to `_MAX_RETRIES`; raises on final failure.
+
+    Async so a whole run shares one event loop: each command drives its calls
+    under a single `asyncio.run(...)`, so the underlying HTTP client is created
+    and torn down once instead of per call — which is what produced spurious
+    "Event loop is closed" noise across sequential synchronous calls.
+    """
+
+    async def _raw(response_format: Any) -> ChatCompletion:
+        # cast(Any, messages): any-llm types messages invariantly, so a plain
+        # list[dict] needs a boundary cast. We never stream, so the result is a
+        # ChatCompletion, not the streaming-iterator half of the return union.
+        return cast(
+            ChatCompletion,
+            await any_llm.acompletion(
+                model=settings.model,
+                provider=_PROVIDER,
+                api_base=settings.base_url,
+                api_key=settings.api_key,
+                temperature=_TEMPERATURE,
+                messages=cast(Any, messages),
+                response_format=response_format,
+            ),
+        )
+
+    last: Exception | None = None
+    for _ in range(_MAX_RETRIES):
+        try:
+            resp = await _raw(schema)
+            parsed = getattr(resp.choices[0].message, "parsed", None)
+            if parsed is not None:
+                return parsed
+        except Exception as e:  # endpoint may reject pydantic response_format
+            last = e
+        try:
+            resp = await _raw({"type": "json_object"})
+            content = resp.choices[0].message.content or ""
+            return schema.model_validate_json(_strip_json(content))
+        except Exception as e:
+            last = e
+    raise last if last else RuntimeError("LLM call failed")
+
+
+# ---------- phase 1: discover ----------
+
+
+_DISCOVER_SYS = (
+    "You are a meticulous librarian organizing a person's saved browser tabs. "
+    "Propose a concise set of topical categories that together cover all the "
+    "tabs. Aim for 8-16 topics: specific enough to be useful, broad enough that "
+    "most tabs fit one. Every topic name and description MUST be in English. "
+    'Return JSON: {"topics": [{"name": str, "description": str}]}, where '
+    "description is a one-line rule for what belongs in the topic."
+)
+
+
+async def discover_topics(
+    settings: LLMSettings, entries: Iterable[Entry]
+) -> list[Topic]:
+    lines = [f"- {e.title or '(no title)'}  [{e.domain}]" for e in entries]
+    user = "Here are the tabs (title [domain]):\n\n" + "\n".join(lines)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _DISCOVER_SYS},
+        {"role": "user", "content": user},
+    ]
+    return (await _acomplete(settings, messages, TopicList)).topics
+
+
+def _toml_str(s: str) -> str:
+    body = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{body}"'
+
+
+def write_topics_toml(topics: list[Topic], path: Path) -> None:
+    out = [
+        "# Topics proposed by the model. Edit freely before `classify apply`:",
+        "#   rename / merge / delete topics, and refine each description (the",
+        "#   description is the rule the model uses to assign tabs).",
+        "",
+    ]
+    for t in topics:
+        out.append("[[topic]]")
+        out.append(f"name = {_toml_str(t.name)}")
+        out.append(f"description = {_toml_str(t.description)}")
+        out.append("")
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+def load_topics_toml(path: Path) -> list[Topic]:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        err.print(f"[red]error:[/] cannot read topics file {path}: {e}")
+        raise typer.Exit(1) from e
+    topics = [Topic(**t) for t in data.get("topic", [])]
+    if not topics:
+        err.print(f"[red]error:[/] no [[topic]] entries in {path}")
+        raise typer.Exit(1)
+    return topics
+
+
+# ---------- phase 2: classify ----------
+
+
+_CLASSIFY_SYS = (
+    "You assign saved browser tabs to topics. You are given a numbered list of "
+    "topics and a batch of tabs (each with an id, title and domain). For EVERY "
+    "tab, choose the single best-fitting topic by its exact name. If no topic "
+    'fits well, use the topic name "unclassified". Do not invent topic names. '
+    'Return JSON: {"assignments": [{"id": int, "topic": str}]}, one entry '
+    "per tab id given."
+)
+
+
+def _batches[T](items: list[T], size: int) -> Iterable[list[T]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+async def classify_entries(
+    settings: LLMSettings, entries: list[Entry], topics: list[Topic]
+) -> dict[int, str]:
+    """Map entry id -> topic name (or UNCLASSIFIED). Defensive: a failed batch
+    or any unrecognized/missing id falls back to UNCLASSIFIED, never aborts."""
+    valid = {t.name for t in topics}
+    topic_block = "\n".join(
+        f"{i}. {t.name} — {t.description}" for i, t in enumerate(topics, 1)
+    )
+    assigned: dict[int, str] = {}
+    batches = list(_batches(entries, _BATCH_SIZE))
+    for n, batch in enumerate(batches, 1):
+        err.print(
+            f"[grey50]classifying batch {n}/{len(batches)} ({len(batch)} tabs)...[/]"
+        )
+        tab_block = "\n".join(
+            f"[{e.id}] {e.title or '(no title)'}  ({e.domain})" for e in batch
+        )
+        user = (
+            f"Topics:\n{topic_block}\n\n"
+            f"Tabs to classify:\n{tab_block}\n\n"
+            "Return JSON assignments for every id above."
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _CLASSIFY_SYS},
+            {"role": "user", "content": user},
+        ]
+        try:
+            result = await _acomplete(settings, messages, AssignmentList)
+            for a in result.assignments:
+                assigned[a.id] = a.topic if a.topic in valid else UNCLASSIFIED
+        except Exception as e:
+            err.print(
+                f"[yellow]warn:[/] batch {n} failed ({e}); "
+                "marking its tabs unclassified"
+            )
+        # any id the model skipped or that failed -> unclassified
+        for e in batch:
+            assigned.setdefault(e.id, UNCLASSIFIED)
+    return assigned
+
+
+# ---------- assemble + render ----------
+
+
+def build_document(
+    entries: list[Entry],
+    noise: list[Entry],
+    topics: list[Topic],
+    assignments: dict[int, str],
+) -> dict:
+    """Shape results into the exporter's {groups:[{name,color,tabs}]} document,
+    grouped by topic, so the existing renderers can be reused as-is."""
+    by_id = {e.id: e for e in entries}
+    buckets: dict[str, list[Entry]] = {t.name: [] for t in topics}
+    buckets[UNCLASSIFIED] = []
+    for eid, topic in assignments.items():
+        buckets.setdefault(topic, []).append(by_id[eid])
+
+    ordered = [t.name for t in topics] + [UNCLASSIFIED]
+    groups = []
+    color_i = 0
+    for name in ordered:
+        tabs = buckets.get(name, [])
+        if not tabs and name == UNCLASSIFIED:
+            continue
+        if name in (UNCLASSIFIED, NOISE):
+            color = "grey"
+        else:
+            color = _PALETTE[color_i % len(_PALETTE)]
+            color_i += 1
+        groups.append(
+            {
+                "name": name,
+                "color": color,
+                "tabs": [
+                    {"title": e.title, "url": e.url, "window": None} for e in tabs
+                ],
+            }
+        )
+    if noise:
+        groups.append(
+            {
+                "name": NOISE,
+                "color": "grey",
+                "tabs": [
+                    {"title": e.title, "url": e.url, "window": None} for e in noise
+                ],
+            }
+        )
+    return {
+        "group_count": len(groups),
+        "tab_count": sum(len(g["tabs"]) for g in groups),
+        "groups": groups,
+    }
+
+
+def _assert_urls_preserved(
+    document: dict, entries: list[Entry], noise: list[Entry]
+) -> None:
+    """Hard guarantee: every input URL appears exactly once in the output, and
+    no URL was fabricated. Aborts loudly if violated."""
+    expected = {e.url for e in entries} | {e.url for e in noise}
+    out = [t["url"] for g in document["groups"] for t in g["tabs"]]
+    out_set = set(out)
+    if out_set != expected or len(out) != len(expected):
+        missing = expected - out_set
+        extra = out_set - expected
+        err.print(
+            f"[red]integrity check FAILED[/] — "
+            f"expected {len(expected)} unique URLs, emitted {len(out)} "
+            f"({len(out_set)} unique); missing={len(missing)} extra={len(extra)}"
+        )
+        for u in list(extra)[:5]:
+            err.print(f"  [red]fabricated:[/] {u}")
+        raise typer.Exit(2)
+
+
+def _write_outputs(document: dict, fmt: str, out_dir: Path) -> None:
+    if fmt == "all":
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "classified.md").write_text(render_md(document), encoding="utf-8")
+        (out_dir / "classified.json").write_text(
+            json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (out_dir / "classified.html").write_text(
+            render_html(document), encoding="utf-8"
+        )
+        with (out_dir / "classified.csv").open("w", encoding="utf-8", newline="") as f:
+            render_csv(document, f)
+        err.print(
+            f"[green]wrote[/] classified.md/json/html/csv into [bold]{out_dir}/[/]"
+        )
+    elif fmt == "tree":
+        render_tree(document, Console())
+    elif fmt == "md":
+        Console().print(render_md(document), markup=False, highlight=False)
+    elif fmt == "html":
+        print(render_html(document))
+    elif fmt == "json":
+        print(json.dumps(document, ensure_ascii=False, indent=2))
+    elif fmt == "csv":
+        import sys
+
+        render_csv(document, sys.stdout)
+
+
+# ---------- CLI ----------
+
+app = typer.Typer(
+    no_args_is_help=True,
+    help="LLM topical classification of an exported tab-groups JSON file.",
+    add_completion=False,
+)
+
+_ConfigOpt = Annotated[
+    Path,
+    typer.Option(
+        "--config", "-c", help="TOML config file (TABGROUPS_* env overrides)."
+    ),
+]
+_UnwrapOpt = Annotated[
+    bool,
+    typer.Option(help="Unwrap archive/proxy URLs to their real source domain."),
+]
+
+
+@app.command()
+def discover(
+    export_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, help="Exported tabgroups.json."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", "-o", help="Where to write the editable topics TOML."),
+    ] = Path("topics.toml"),
+    config: _ConfigOpt = Path("config.toml"),
+    unwrap: _UnwrapOpt = True,
+) -> None:
+    """Propose an editable topic list from the exported tabs."""
+    settings = load_settings(config)
+    entries, noise, total = load_entries(export_json, unwrap=unwrap)
+    err.print(
+        f"[grey50]{total} tabs, {len(entries)} unique to classify "
+        f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
+    )
+    topics = asyncio.run(discover_topics(settings, entries))
+    write_topics_toml(topics, out)
+    err.print(
+        f"[green]wrote[/] {len(topics)} topics to [bold]{out}[/] — edit, then run:"
+    )
+    err.print(f"  tabgroups classify apply {export_json} --topics {out}")
+
+
+@app.command()
+def apply(
+    export_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, help="Exported tabgroups.json."),
+    ],
+    topics_file: Annotated[
+        Path,
+        typer.Option(
+            "--topics", "-t", exists=True, dir_okay=False, help="topics.toml."
+        ),
+    ] = Path("topics.toml"),
+    fmt: Annotated[
+        str, typer.Option("--format", "-f", help="tree|md|json|html|csv|all.")
+    ] = "all",
+    out_dir: Annotated[
+        Path, typer.Option(help="Output directory when --format all.")
+    ] = Path("classified"),
+    config: _ConfigOpt = Path("config.toml"),
+    unwrap: _UnwrapOpt = True,
+) -> None:
+    """Classify tabs against an (edited) topic list and render the result."""
+    settings = load_settings(config)
+    topics = load_topics_toml(topics_file)
+    entries, noise, total = load_entries(export_json, unwrap=unwrap)
+    err.print(
+        f"[grey50]{total} tabs → {len(entries)} unique, {len(topics)} topics "
+        f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
+    )
+    assignments = asyncio.run(classify_entries(settings, entries, topics))
+    document = build_document(entries, noise, topics, assignments)
+    _assert_urls_preserved(document, entries, noise)
+
+    counts = {g["name"]: len(g["tabs"]) for g in document["groups"]}
+    for name, c in counts.items():
+        err.print(f"  [bold]{c:>4}[/]  {name}")
+    err.print(f"[green]✓ {len(entries) + len(noise)} URLs preserved, 0 fabricated[/]")
+    _write_outputs(document, fmt, out_dir)

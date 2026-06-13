@@ -1,7 +1,7 @@
 [project]
-name = "tabgroups-export"
+name = "tabgroups"
 version = "0.1.0"
-description = "Export Chromium browser tab groups from the on-disk SNSS session file"
+description = "Read a Chromium browser's tab groups from its on-disk session file, then export or LLM-classify them"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -10,12 +10,16 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "any-llm-sdk>=1.17.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
     "rich>=15.0.0",
+    "tldextract>=5.3.1",
     "typer>=0.26.7",
 ]
 
 [project.scripts]
-tabgroups-export = "tabgroups_export:main"
+tabgroups = "tabgroups:main"
 
 [build-system]
 requires = ["uv_build>=0.11.21,<0.12.0"]
