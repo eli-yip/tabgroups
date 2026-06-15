@@ -7,7 +7,10 @@ are shared by both the `export` and `classify` subcommands.
 
 import csv
 import html
+import json
+import sys
 from enum import StrEnum
+from pathlib import Path
 from typing import NotRequired, TextIO, TypedDict
 
 from rich.console import Console
@@ -171,3 +174,51 @@ def render_tree(d: Document, console: Console) -> None:
             )
             branch.add(leaf)
     console.print(root)
+
+
+# The concrete, single-stream formats (everything except `tree` and `all`), in
+# the order `write_all_formats` emits files.
+_FILE_FORMATS = (Format.md, Format.json, Format.html, Format.csv)
+
+
+def render_to(d: Document, fmt: Format, fh: TextIO) -> None:
+    """Render `d` to a text stream in one concrete format (md/html/json/csv).
+    `tree` and `all` are not single-stream formats and are rejected."""
+    match fmt:
+        case Format.md:
+            fh.write(render_md(d))
+        case Format.html:
+            fh.write(render_html(d))
+        case Format.json:
+            json.dump(d, fh, ensure_ascii=False, indent=2)
+        case Format.csv:
+            render_csv(d, fh)
+        case Format.tree | Format.all:
+            raise ValueError(f"{fmt} is not a single-stream format")
+
+
+def write_all_formats(d: Document, out_dir: Path, stem: str) -> None:
+    """Write `d` as `<stem>.md/.json/.html/.csv` into out_dir (created if needed)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for fmt in _FILE_FORMATS:
+        with (out_dir / f"{stem}.{fmt.value}").open(
+            "w", encoding="utf-8", newline=""
+        ) as fh:
+            render_to(d, fmt, fh)
+
+
+def emit(d: Document, fmt: Format, out_dir: Path, stem: str, err: Console) -> None:
+    """Emit `d` in `fmt` — the output dispatch shared by `export` and `classify`:
+    `tree` draws to the terminal, `all` writes the four file formats as
+    `<stem>.<ext>` into out_dir (announced on `err`), and every other format
+    streams to stdout."""
+    match fmt:
+        case Format.tree:
+            render_tree(d, Console())
+        case Format.all:
+            write_all_formats(d, out_dir, stem)
+            err.print(
+                f"[green]wrote[/] {stem}.md/json/html/csv into [bold]{out_dir}/[/]"
+            )
+        case _:
+            render_to(d, fmt, sys.stdout)

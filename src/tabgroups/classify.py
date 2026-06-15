@@ -29,7 +29,6 @@ Config (any-llm, OpenAI-compatible endpoint) comes from a TOML file and/or
 import asyncio
 import json
 import re
-import sys
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
@@ -58,10 +57,7 @@ from .render import (
     Document,
     Format,
     Group,
-    render_csv,
-    render_html,
-    render_md,
-    render_tree,
+    emit,
 )
 
 err = Console(stderr=True)
@@ -497,38 +493,6 @@ def _assert_urls_preserved(
         raise typer.Exit(2)
 
 
-def _write_outputs(document: Document, fmt: Format, out_dir: Path) -> None:
-    match fmt:
-        case Format.all:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / "classified.md").write_text(
-                render_md(document), encoding="utf-8"
-            )
-            (out_dir / "classified.json").write_text(
-                json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            (out_dir / "classified.html").write_text(
-                render_html(document), encoding="utf-8"
-            )
-            with (out_dir / "classified.csv").open(
-                "w", encoding="utf-8", newline=""
-            ) as f:
-                render_csv(document, f)
-            err.print(
-                f"[green]wrote[/] classified.md/json/html/csv into [bold]{out_dir}/[/]"
-            )
-        case Format.tree:
-            render_tree(document, Console())
-        case Format.md:
-            sys.stdout.write(render_md(document))
-        case Format.html:
-            sys.stdout.write(render_html(document))
-        case Format.json:
-            json.dump(document, sys.stdout, ensure_ascii=False, indent=2)
-        case Format.csv:
-            render_csv(document, sys.stdout)
-
-
 # ---------- CLI ----------
 
 app = typer.Typer(
@@ -646,7 +610,7 @@ def apply(
             f"[grey50]cache: {stats.hits}/{stats.total} hit "
             f"({stats.rate():.0%}) · {resolve_cache_dir()}[/]"
         )
-    _write_outputs(document, fmt, out_dir)
+    emit(document, fmt, out_dir, "classified", err)
 
 
 cache_app = typer.Typer(

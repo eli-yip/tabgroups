@@ -21,7 +21,6 @@ Formats: tree, md, json, html, csv, all. A rich summary table is always printed
 to stderr; the chosen format goes to stdout (or files for --format all).
 """
 
-import json
 import os
 import shutil
 import struct
@@ -45,10 +44,7 @@ from .render import (
     Group,
     Tab,
     _title,
-    render_csv,
-    render_html,
-    render_md,
-    render_tree,
+    emit,
 )
 
 # Session command ids we care about (sessions/session_service_commands.cc)
@@ -352,18 +348,6 @@ def print_summary(d: Document, session_path: Path) -> None:
     err.print(f"[grey50]source:[/] {session_path}")
 
 
-def write_all(d: Document, out_dir: Path) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "tabgroups.md").write_text(render_md(d), encoding="utf-8")
-    (out_dir / "tabgroups.json").write_text(
-        json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (out_dir / "tabgroups.html").write_text(render_html(d), encoding="utf-8")
-    with (out_dir / "tabgroups.csv").open("w", encoding="utf-8", newline="") as f:
-        render_csv(d, f)
-    err.print(f"[green]wrote[/] md/json/html/csv into [bold]{out_dir}/[/]")
-
-
 def export(
     browser: Annotated[
         Browser, typer.Option("--browser", "-b", help="Chromium-based browser.")
@@ -402,16 +386,4 @@ def export(
     if fmt is not Format.tree:
         print_summary(d, session_path)
 
-    match fmt:
-        case Format.tree:
-            render_tree(d, Console())
-        case Format.all:
-            write_all(d, out_dir)
-        case Format.json:
-            json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
-        case Format.csv:
-            render_csv(d, sys.stdout)
-        case Format.md:
-            sys.stdout.write(render_md(d))
-        case Format.html:
-            sys.stdout.write(render_html(d))
+    emit(d, fmt, out_dir, "tabgroups", err)
