@@ -7,9 +7,22 @@ These renderers are shared by both the `export` and `classify` subcommands.
 
 import csv
 import html
+from enum import StrEnum
 
 from rich.text import Text
 from rich.tree import Tree
+
+
+class Format(StrEnum):
+    """Output format shared by the `export` and `classify` subcommands."""
+
+    tree = "tree"
+    md = "md"
+    json = "json"
+    html = "html"
+    csv = "csv"
+    all = "all"
+
 
 # Chromium tab_groups::TabGroupColorId order — the canonical color-name space
 # shared by the SNSS parser (which decodes the ids), these renderers, and the

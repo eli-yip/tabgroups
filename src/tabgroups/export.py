@@ -41,6 +41,7 @@ from rich.text import Text
 from .render import (
     COLORS,
     RICH_STYLE,
+    Format,
     _title,
     render_csv,
     render_html,
@@ -294,15 +295,6 @@ class Browser(StrEnum):
     vivaldi = "vivaldi"
 
 
-class Format(StrEnum):
-    tree = "tree"
-    md = "md"
-    json = "json"
-    html = "html"
-    csv = "csv"
-    all = "all"
-
-
 # rich Console for status/summary; goes to stderr so stdout stays pipeable.
 err = Console(stderr=True)
 
@@ -412,15 +404,16 @@ def export(
     if fmt is not Format.tree:
         print_summary(d, session_path)
 
-    if fmt is Format.tree:
-        render_tree(d, Console())
-    elif fmt is Format.all:
-        write_all(d, out_dir)
-    elif fmt is Format.json:
-        json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
-    elif fmt is Format.csv:
-        render_csv(d, sys.stdout)
-    elif fmt is Format.md:
-        sys.stdout.write(render_md(d))
-    elif fmt is Format.html:
-        sys.stdout.write(render_html(d))
+    match fmt:
+        case Format.tree:
+            render_tree(d, Console())
+        case Format.all:
+            write_all(d, out_dir)
+        case Format.json:
+            json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
+        case Format.csv:
+            render_csv(d, sys.stdout)
+        case Format.md:
+            sys.stdout.write(render_md(d))
+        case Format.html:
+            sys.stdout.write(render_html(d))

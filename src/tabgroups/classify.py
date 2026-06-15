@@ -28,6 +28,7 @@ Config (any-llm, OpenAI-compatible endpoint) comes from a TOML file and/or
 
 import asyncio
 import json
+import sys
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
@@ -55,7 +56,14 @@ from .cache import (
     open_cache,
     resolve_cache_dir,
 )
-from .render import COLORS, render_csv, render_html, render_md, render_tree
+from .render import (
+    COLORS,
+    Format,
+    render_csv,
+    render_html,
+    render_md,
+    render_tree,
+)
 
 err = Console(stderr=True)
 
@@ -563,33 +571,36 @@ def _assert_urls_preserved(
         raise typer.Exit(2)
 
 
-def _write_outputs(document: dict, fmt: str, out_dir: Path) -> None:
-    if fmt == "all":
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "classified.md").write_text(render_md(document), encoding="utf-8")
-        (out_dir / "classified.json").write_text(
-            json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (out_dir / "classified.html").write_text(
-            render_html(document), encoding="utf-8"
-        )
-        with (out_dir / "classified.csv").open("w", encoding="utf-8", newline="") as f:
-            render_csv(document, f)
-        err.print(
-            f"[green]wrote[/] classified.md/json/html/csv into [bold]{out_dir}/[/]"
-        )
-    elif fmt == "tree":
-        render_tree(document, Console())
-    elif fmt == "md":
-        Console().print(render_md(document), markup=False, highlight=False)
-    elif fmt == "html":
-        print(render_html(document))
-    elif fmt == "json":
-        print(json.dumps(document, ensure_ascii=False, indent=2))
-    elif fmt == "csv":
-        import sys
-
-        render_csv(document, sys.stdout)
+def _write_outputs(document: dict, fmt: Format, out_dir: Path) -> None:
+    match fmt:
+        case Format.all:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "classified.md").write_text(
+                render_md(document), encoding="utf-8"
+            )
+            (out_dir / "classified.json").write_text(
+                json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            (out_dir / "classified.html").write_text(
+                render_html(document), encoding="utf-8"
+            )
+            with (out_dir / "classified.csv").open(
+                "w", encoding="utf-8", newline=""
+            ) as f:
+                render_csv(document, f)
+            err.print(
+                f"[green]wrote[/] classified.md/json/html/csv into [bold]{out_dir}/[/]"
+            )
+        case Format.tree:
+            render_tree(document, Console())
+        case Format.md:
+            Console().print(render_md(document), markup=False, highlight=False)
+        case Format.html:
+            print(render_html(document))
+        case Format.json:
+            print(json.dumps(document, ensure_ascii=False, indent=2))
+        case Format.csv:
+            render_csv(document, sys.stdout)
 
 
 # ---------- CLI ----------
@@ -669,8 +680,13 @@ def apply(
         ),
     ] = Path("topics.toml"),
     fmt: Annotated[
-        str, typer.Option("--format", "-f", help="tree|md|json|html|csv|all.")
-    ] = "all",
+        Format,
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output format; 'tree' draws a terminal tree, 'all' writes files.",
+        ),
+    ] = Format.all,
     out_dir: Annotated[
         Path, typer.Option(help="Output directory when --format all.")
     ] = Path("classified"),
