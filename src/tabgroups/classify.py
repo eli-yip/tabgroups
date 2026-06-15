@@ -594,11 +594,11 @@ def _write_outputs(document: dict, fmt: Format, out_dir: Path) -> None:
         case Format.tree:
             render_tree(document, Console())
         case Format.md:
-            Console().print(render_md(document), markup=False, highlight=False)
+            sys.stdout.write(render_md(document))
         case Format.html:
-            print(render_html(document))
+            sys.stdout.write(render_html(document))
         case Format.json:
-            print(json.dumps(document, ensure_ascii=False, indent=2))
+            json.dump(document, sys.stdout, ensure_ascii=False, indent=2)
         case Format.csv:
             render_csv(document, sys.stdout)
 
