@@ -358,10 +358,11 @@ async def classify_entries(
     entries: list[Entry],
     topics: list[Topic],
     cache: ModelCache | None = None,
-) -> tuple[dict[int, str], CacheStats]:
+) -> tuple[dict[int, str], CacheStats, CallStats]:
     """Map entry id -> topic name (or UNCLASSIFIED), reusing cached per-tab
-    assignments. Returns (assignments, stats). Defensive: a failed batch or any
-    unrecognized/missing id falls back to UNCLASSIFIED, never aborts.
+    assignments. Returns (assignments, cache_stats, call_stats). Defensive: a
+    failed batch or any unrecognized/missing id falls back to UNCLASSIFIED,
+    never aborts.
 
     Every explicit per-tab decision from the model is cached — including a
     deliberate UNCLASSIFIED. Only the structural fallback for ids the model
@@ -381,6 +382,8 @@ async def classify_entries(
             title=e.title,
             domain=e.domain,
         )
+
+    calls = CallStats()  # per-batch success/failure, recorded inside classify_batch
 
     async def classify_batch(batch: list[Entry], label: str) -> dict[int, str]:
         """Classify one batch; return {id -> topic} for every id in it — the
@@ -413,7 +416,9 @@ async def classify_entries(
                 out[a.id] = topic
                 if cache is not None:  # cache every explicit per-tab decision
                     cache.put(key_for(by_id[a.id]), topic)
+            calls.good += 1
         except Exception as exc:
+            calls.bad += 1
             err.print(
                 f"[yellow]warn:[/] batch {label} failed ({exc}); "
                 "marking its tabs unclassified"
@@ -425,7 +430,7 @@ async def classify_entries(
         return out
 
     assigned: dict[int, str] = {}
-    stats = CacheStats()
+    cache_stats = CacheStats()
 
     # Pre-scan: serve cache hits directly, leave only misses for the model.
     pending: list[Entry] = []
@@ -433,15 +438,15 @@ async def classify_entries(
         cached = cache.get(key_for(e)) if cache is not None else None
         if cached is not None:
             assigned[e.id] = cached
-            stats.good += 1
+            cache_stats.good += 1
         else:
             pending.append(e)
-            stats.bad += 1
+            cache_stats.bad += 1
 
     batches = list(_batches(pending, _BATCH_SIZE))
     for n, batch in enumerate(batches, 1):
         assigned.update(await classify_batch(batch, f"{n}/{len(batches)}"))
-    return assigned, stats
+    return assigned, cache_stats, calls
 
 
 # ---------- assemble + render ----------
@@ -626,7 +631,9 @@ def apply(
         f"[grey50]{loaded.total} tabs → {len(entries)} unique, {len(topics)} topics "
         f"({len(noise)} noise, {loaded.duplicates} duplicates)[/]"
     )
-    assignments, stats = asyncio.run(classify_entries(settings, entries, topics, cache))
+    assignments, cache_stats, calls = asyncio.run(
+        classify_entries(settings, entries, topics, cache)
+    )
     document = build_document(entries, noise, topics, assignments)
     _assert_urls_preserved(document, entries, noise)
 
@@ -634,12 +641,17 @@ def apply(
     for name, c in counts.items():
         err.print(f"  [bold]{c:>4}[/]  {name}")
     err.print(f"[green]✓ {len(entries) + len(noise)} URLs preserved, 0 fabricated[/]")
+    if calls.total:
+        err.print(
+            f"[grey50]LLM: {calls.good}/{calls.total} batches ok "
+            f"({calls.rate():.0%}){'' if not calls.bad else ' — failures unclassified'}[/]"
+        )
     if cache is None:
         err.print("[grey50]cache: disabled[/]")
     else:
         err.print(
-            f"[grey50]cache: {stats.good}/{stats.total} hit "
-            f"({stats.rate():.0%}) · {resolve_cache_dir()}[/]"
+            f"[grey50]cache: {cache_stats.good}/{cache_stats.total} hit "
+            f"({cache_stats.rate():.0%}) · {resolve_cache_dir()}[/]"
         )
     emit(document, fmt, out_dir, "classified", err)
 
