@@ -28,6 +28,7 @@ Config (any-llm, OpenAI-compatible endpoint) comes from a TOML file and/or
 
 import asyncio
 import json
+import re
 import sys
 import tomllib
 from collections.abc import Iterable
@@ -81,6 +82,10 @@ _extract = tldextract.TLDExtract(suffix_list_urls=())
 # classified by its true source (zhihu.com), not the proxy host.
 _ARCHIVE_MARKERS = ("/api/v1/archive/",)
 
+# Normalize a scheme separator to exactly "://": some exports mangle it to a
+# single slash ("https:/host"), others leave the normal "https://".
+_SCHEME_SEP = re.compile(r"(https?):/+")
+
 # Fixed knobs — deliberately NOT user config. config.toml only carries the three
 # credentials (base_url / api_key / model); these are sensible constants.
 _PROVIDER = "openai"  # any-llm provider for the OpenAI-compatible endpoint
@@ -98,12 +103,7 @@ def _unwrap(url: str) -> str:
         i = url.find(marker)
         if i != -1:
             inner = unquote(url[i + len(marker) :])
-            # some exported links have a mangled scheme like "https:/host/..."
-            inner = inner.replace("https:/", "https://").replace("http:/", "http://")
-            inner = inner.replace("https:///", "https://").replace(
-                "http:///", "http://"
-            )
-            return inner or url
+            return _SCHEME_SEP.sub(r"\1://", inner) or url
     return url
 
 
