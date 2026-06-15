@@ -179,6 +179,14 @@ def _strip_json(text: str) -> str:
     return s[start : end + 1] if start != -1 and end != -1 else s
 
 
+# Per-process memory of whether the endpoint honors native structured output.
+# None = unknown (probe it), True = confirmed, False = unsupported (skip it).
+# Set the first time we learn the answer so an unsupported endpoint costs one
+# request per call instead of two (a doomed schema attempt + the fallback) on
+# every call and every retry.
+_schema_supported: bool | None = None
+
+
 async def _acomplete[T: BaseModel](
     settings: LLMSettings, messages: list[dict[str, Any]], schema: type[T]
 ) -> T:
@@ -188,11 +196,18 @@ async def _acomplete[T: BaseModel](
     to json_object mode + manual validation for endpoints that lack strict
     json_schema support. Retries up to `_MAX_RETRIES`; raises on final failure.
 
+    The first time the endpoint rejects (or accepts but doesn't populate)
+    structured output, we remember that in `_schema_supported` and skip the
+    doomed attempt thereafter — so an unsupported endpoint isn't billed twice
+    per call. A confirmed-supported endpoint keeps using schema mode; a one-off
+    failure just falls back for that attempt without disabling it.
+
     Async so a whole run shares one event loop: each command drives its calls
     under a single `asyncio.run(...)`, so the underlying HTTP client is created
     and torn down once instead of per call — which is what produced spurious
     "Event loop is closed" noise across sequential synchronous calls.
     """
+    global _schema_supported
 
     async def _raw(response_format: Any) -> ChatCompletion:
         # cast(Any, messages): any-llm types messages invariantly, so a plain
@@ -213,13 +228,22 @@ async def _acomplete[T: BaseModel](
 
     last: Exception | None = None
     for _ in range(_MAX_RETRIES):
-        try:
-            resp = await _raw(schema)
-            parsed = getattr(resp.choices[0].message, "parsed", None)
-            if parsed is not None:
-                return parsed
-        except Exception as e:  # endpoint may reject pydantic response_format
-            last = e
+        if _schema_supported is not False:
+            try:
+                resp = await _raw(schema)
+                parsed = getattr(resp.choices[0].message, "parsed", None)
+                if parsed is not None:
+                    _schema_supported = True
+                    return parsed
+                # Accepted the request but returned no parsed payload: only
+                # treat as unsupported while still probing, so a confirmed
+                # endpoint isn't disabled by a one-off empty reply.
+                if _schema_supported is None:
+                    _schema_supported = False
+            except Exception as e:  # endpoint may reject pydantic response_format
+                if _schema_supported is None:
+                    _schema_supported = False
+                last = e
         try:
             resp = await _raw({"type": "json_object"})
             content = resp.choices[0].message.content or ""
