@@ -344,6 +344,48 @@ async def classify_entries(
             domain=e.domain,
         )
 
+    async def classify_batch(batch: list[Entry], label: str) -> dict[int, str]:
+        """Classify one batch; return {id -> topic} for every id in it — the
+        model's choice (normalized to a known topic or UNCLASSIFIED) where it
+        answered, else the UNCLASSIFIED fallback. Genuine answers are cached; the
+        fallback never is, so a transient batch failure can't freeze a tab."""
+        err.print(f"[grey50]classifying batch {label} ({len(batch)} tabs)...[/]")
+        tab_block = "\n".join(
+            f"[{e.id}] {e.title or '(no title)'}  ({e.domain})" for e in batch
+        )
+        user = (
+            f"Topics:\n{topic_block}\n\n"
+            f"Tabs to classify:\n{tab_block}\n\n"
+            "Return JSON assignments for every id above."
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _CLASSIFY_SYS},
+            {"role": "user", "content": user},
+        ]
+        by_id = {e.id: e for e in batch}
+        out: dict[int, str] = {}
+        try:
+            result = await _acomplete(settings, messages, AssignmentList)
+            for a in result.assignments:
+                if a.id not in by_id:
+                    continue  # ignore ids we didn't ask about in this batch
+                # an unknown topic name normalizes to unclassified; a deliberate
+                # "unclassified" is a real model decision, not a failure.
+                topic = a.topic if a.topic in valid else UNCLASSIFIED
+                out[a.id] = topic
+                if cache is not None:  # cache every explicit per-tab decision
+                    cache.put(key_for(by_id[a.id]), topic)
+        except Exception as exc:
+            err.print(
+                f"[yellow]warn:[/] batch {label} failed ({exc}); "
+                "marking its tabs unclassified"
+            )
+        # any id the model skipped or whose batch failed -> unclassified, and
+        # NOT cached, so a transient miss can never be frozen onto a tab.
+        for e in batch:
+            out.setdefault(e.id, UNCLASSIFIED)
+        return out
+
     assigned: dict[int, str] = {}
     stats = CacheStats()
 
@@ -360,42 +402,7 @@ async def classify_entries(
 
     batches = list(_batches(pending, _BATCH_SIZE))
     for n, batch in enumerate(batches, 1):
-        err.print(
-            f"[grey50]classifying batch {n}/{len(batches)} ({len(batch)} tabs)...[/]"
-        )
-        tab_block = "\n".join(
-            f"[{e.id}] {e.title or '(no title)'}  ({e.domain})" for e in batch
-        )
-        user = (
-            f"Topics:\n{topic_block}\n\n"
-            f"Tabs to classify:\n{tab_block}\n\n"
-            "Return JSON assignments for every id above."
-        )
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _CLASSIFY_SYS},
-            {"role": "user", "content": user},
-        ]
-        by_id = {e.id: e for e in batch}
-        try:
-            result = await _acomplete(settings, messages, AssignmentList)
-            for a in result.assignments:
-                if a.id not in by_id:
-                    continue  # ignore ids we didn't ask about in this batch
-                # an unknown topic name normalizes to unclassified; a deliberate
-                # "unclassified" is a real model decision, not a failure.
-                topic = a.topic if a.topic in valid else UNCLASSIFIED
-                assigned[a.id] = topic
-                if cache is not None:  # cache every explicit per-tab decision
-                    cache.put(key_for(by_id[a.id]), topic)
-        except Exception as e:
-            err.print(
-                f"[yellow]warn:[/] batch {n} failed ({e}); "
-                "marking its tabs unclassified"
-            )
-        # any id the model skipped or whose batch failed -> unclassified, and
-        # NOT cached, so a transient miss can never be frozen onto a tab.
-        for e in batch:
-            assigned.setdefault(e.id, UNCLASSIFIED)
+        assigned.update(await classify_batch(batch, f"{n}/{len(batches)}"))
     return assigned, stats
 
 
