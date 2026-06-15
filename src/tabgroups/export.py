@@ -21,7 +21,6 @@ Formats: tree, md, json, html, csv, all. A rich summary table is always printed
 to stderr; the chosen format goes to stdout (or files for --format all).
 """
 
-import glob
 import json
 import os
 import shutil
@@ -97,32 +96,28 @@ BROWSERS = {
 }
 
 
-def user_data_dir(browser):
-    return os.path.join(os.path.expanduser("~"), BROWSERS[browser][_PLAT])
+def user_data_dir(browser: str) -> Path:
+    return Path.home() / BROWSERS[browser][_PLAT]
 
 
-def list_profiles(browser):
+def list_profiles(browser: str) -> list[str]:
     """Profile directory names that actually contain a Sessions/ folder."""
     base = user_data_dir(browser)
-    if not os.path.isdir(base):
+    if not base.is_dir():
         return []
-    profiles = []
-    for entry in sorted(os.listdir(base)):
-        if os.path.isdir(os.path.join(base, entry, "Sessions")):
-            profiles.append(entry)
-    return profiles
+    return [e.name for e in sorted(base.iterdir()) if (e / "Sessions").is_dir()]
 
 
-def default_sessions_dir(browser, profile):
-    d = os.path.join(user_data_dir(browser), profile, "Sessions")
-    return d if os.path.isdir(d) else None
+def default_sessions_dir(browser: str, profile: str) -> Path | None:
+    d = user_data_dir(browser) / profile / "Sessions"
+    return d if d.is_dir() else None
 
 
-def newest_session_file(sessions_dir):
-    files = glob.glob(os.path.join(sessions_dir, "Session_*"))
+def newest_session_file(sessions_dir: Path) -> Path | None:
+    files = list(sessions_dir.glob("Session_*"))
     if not files:
         return None
-    return max(files, key=os.path.getmtime)
+    return max(files, key=lambda p: p.stat().st_mtime)
 
 
 class Pickle:
@@ -323,7 +318,7 @@ def load_session(
         if not newest:
             err.print(f"[red]error:[/] no Session_* files in {sessions_dir}")
             raise typer.Exit(1)
-        session = Path(newest)
+        session = newest
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".snss") as tmp:
         shutil.copyfile(session, tmp.name)
@@ -331,7 +326,7 @@ def load_session(
     try:
         return session, Path(tmp_path).read_bytes()
     finally:
-        os.unlink(tmp_path)
+        Path(tmp_path).unlink()
 
 
 def print_summary(d: dict, session_path: Path) -> None:
