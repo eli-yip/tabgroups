@@ -39,6 +39,7 @@ from urllib.parse import unquote
 import any_llm
 import tldextract
 import typer
+from aiolimiter import AsyncLimiter
 from any_llm.types.completion import ChatCompletion
 from pydantic import BaseModel
 from rich.console import Console
@@ -90,6 +91,8 @@ _PROVIDER = "openai"  # any-llm provider for the OpenAI-compatible endpoint
 _TEMPERATURE = 0.0  # deterministic classification
 _BATCH_SIZE = 30  # tabs per classification request
 _MAX_RETRIES = 3  # per-call retries before falling back / giving up
+_RPM = 1500  # max LLM requests per minute (token-bucket throttle)
+_MAX_INFLIGHT = 16  # max concurrent in-flight requests (anti thundering-herd)
 
 
 # ---------- entries / preprocessing ----------
@@ -191,13 +194,20 @@ _schema_supported: bool | None = None
 
 
 async def _acomplete[T: BaseModel](
-    settings: LLMSettings, messages: list[dict[str, Any]], schema: type[T]
+    settings: LLMSettings,
+    messages: list[dict[str, Any]],
+    schema: type[T],
+    limiter: AsyncLimiter | None = None,
 ) -> T:
     """Call the model and return a validated `schema` instance.
 
     Tries native structured output (response_format=pydantic), then falls back
     to json_object mode + manual validation for endpoints that lack strict
     json_schema support. Retries up to `_MAX_RETRIES`; raises on final failure.
+
+    When `limiter` is given, every real HTTP request (the initial attempt, the
+    json_object fallback, and each retry) takes one token from it — so the
+    process-wide RPM cap counts actual requests, not batches.
 
     The first time the endpoint rejects (or accepts but doesn't populate)
     structured output, we remember that in `_schema_supported` and skip the
@@ -213,6 +223,9 @@ async def _acomplete[T: BaseModel](
     global _schema_supported
 
     async def _raw(response_format: Any) -> ChatCompletion:
+        # Take an RPM token per real request, before the call goes out.
+        if limiter is not None:
+            await limiter.acquire()
         # cast(Any, messages): any-llm types messages invariantly, so a plain
         # list[dict] needs a boundary cast. We never stream, so the result is a
         # ChatCompletion, not the streaming-iterator half of the return union.
@@ -386,7 +399,9 @@ async def classify_entries(
 
     calls = CallStats()  # per-batch success/failure, recorded inside classify_batch
 
-    async def classify_batch(batch: list[Entry], label: str) -> dict[int, str]:
+    async def classify_batch(
+        batch: list[Entry], label: str, limiter: AsyncLimiter
+    ) -> dict[int, str]:
         """Classify one batch; return {id -> topic} for every id in it — the
         model's choice (normalized to a known topic or UNCLASSIFIED) where it
         answered, else the UNCLASSIFIED fallback. Genuine answers are cached; the
@@ -407,7 +422,7 @@ async def classify_entries(
         by_id = {e.id: e for e in batch}
         out: dict[int, str] = {}
         try:
-            result = await _acomplete(settings, messages, AssignmentList)
+            result = await _acomplete(settings, messages, AssignmentList, limiter)
             for a in result.assignments:
                 if a.id not in by_id:
                     continue  # ignore ids we didn't ask about in this batch
@@ -444,9 +459,22 @@ async def classify_entries(
             pending.append(e)
             cache_stats.bad += 1
 
+    # Run batches concurrently: a shared token bucket caps the long-run request
+    # rate (<= _RPM/min, counted per real request inside _acomplete), and a
+    # semaphore caps instantaneous in-flight batches so the initially-full
+    # bucket can't release a thundering herd at t=0.
     batches = list(_batches(pending, _BATCH_SIZE))
-    for n, batch in enumerate(batches, 1):
-        assigned.update(await classify_batch(batch, f"{n}/{len(batches)}"))
+    limiter = AsyncLimiter(_RPM, 60)
+    sem = asyncio.Semaphore(_MAX_INFLIGHT)
+
+    async def run(n: int, batch: list[Entry]) -> dict[int, str]:
+        async with sem:
+            return await classify_batch(batch, f"{n}/{len(batches)}", limiter)
+
+    for result in await asyncio.gather(
+        *(run(n, batch) for n, batch in enumerate(batches, 1))
+    ):
+        assigned.update(result)
     return assigned, cache_stats, calls
 
 

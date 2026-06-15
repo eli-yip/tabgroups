@@ -10,6 +10,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "aiolimiter>=1.2.1",
     "any-llm-sdk>=1.17.0",
     "diskcache>=5.6.3",
     "platformdirs>=4.10.0",
