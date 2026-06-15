@@ -31,6 +31,7 @@ import json
 import re
 import tomllib
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple, cast
 from urllib.parse import unquote
@@ -59,6 +60,7 @@ from .render import (
     Group,
     emit,
 )
+from .stats import Rate
 
 err = Console(stderr=True)
 
@@ -341,6 +343,11 @@ _CLASSIFY_SYS = (
 )
 
 
+@dataclass
+class CallStats(Rate):
+    """`good` = LLM batches classified, `bad` = batches that fell back."""
+
+
 def _batches[T](items: list[T], size: int) -> Iterable[list[T]]:
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -426,10 +433,10 @@ async def classify_entries(
         cached = cache.get(key_for(e)) if cache is not None else None
         if cached is not None:
             assigned[e.id] = cached
-            stats.hits += 1
+            stats.good += 1
         else:
             pending.append(e)
-            stats.misses += 1
+            stats.bad += 1
 
     batches = list(_batches(pending, _BATCH_SIZE))
     for n, batch in enumerate(batches, 1):
@@ -631,7 +638,7 @@ def apply(
         err.print("[grey50]cache: disabled[/]")
     else:
         err.print(
-            f"[grey50]cache: {stats.hits}/{stats.total} hit "
+            f"[grey50]cache: {stats.good}/{stats.total} hit "
             f"({stats.rate():.0%}) · {resolve_cache_dir()}[/]"
         )
     emit(document, fmt, out_dir, "classified", err)

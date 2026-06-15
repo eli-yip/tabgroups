@@ -26,6 +26,8 @@ from typing import Any
 import diskcache
 import platformdirs
 
+from .stats import Rate
+
 _APP = "tabgroups"
 
 
@@ -152,17 +154,9 @@ def discover_key(
     )
 
 
-# ---------- hit/miss accounting ----------
+# ---------- rate accounting ----------
 
 
 @dataclass
-class CacheStats:
-    hits: int = 0
-    misses: int = 0
-
-    @property
-    def total(self) -> int:
-        return self.hits + self.misses
-
-    def rate(self) -> float:
-        return self.hits / self.total if self.total else 0.0
+class CacheStats(Rate):
+    """`good` = cache hits, `bad` = misses."""
