@@ -1,16 +1,47 @@
 """Renderers for a tab-groups *document* — terminal tree, Markdown, HTML, CSV.
 
-A document is the dict the export parser produces (and `classify` reuses):
-`{group_count, tab_count, groups: [{name, color, tabs: [{title, url}]}]}`.
-These renderers are shared by both the `export` and `classify` subcommands.
+A document is the structure the export parser produces and `classify` reuses;
+its shape is the `Document` / `Group` / `Tab` TypedDicts below. These renderers
+are shared by both the `export` and `classify` subcommands.
 """
 
 import csv
 import html
 from enum import StrEnum
+from typing import NotRequired, TextIO, TypedDict
 
+from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
+
+
+class Tab(TypedDict):
+    """One saved tab: its title, URL, and originating window (None when unknown)."""
+
+    title: str
+    url: str
+    window: int | None
+
+
+class Group(TypedDict):
+    """A named, colored group of tabs. `token` is the SNSS group id, present only
+    on exported documents (classify regroups by topic and omits it)."""
+
+    name: str
+    color: str
+    tabs: list[Tab]
+    token: NotRequired[str]
+
+
+class Document(TypedDict):
+    """A whole export/classification: groups plus their roll-up counts. `version`
+    (SNSS file version) and `browser` are set by the exporter only."""
+
+    group_count: int
+    tab_count: int
+    groups: list[Group]
+    version: NotRequired[int]
+    browser: NotRequired[str]
 
 
 class Format(StrEnum):
@@ -66,12 +97,12 @@ _CSS_COLOR = {
 }
 
 
-def _title(d):
+def _title(d: Document) -> str:
     b = d.get("browser")
     return f"{b.capitalize()} Tab Groups" if b else "Tab Groups"
 
 
-def render_md(d):
+def render_md(d: Document) -> str:
     out = [f"# {_title(d)} — {d['group_count']} groups, {d['tab_count']} tabs\n"]
     for i, g in enumerate(d["groups"], 1):
         name = g["name"] or "(untitled)"
@@ -83,7 +114,7 @@ def render_md(d):
     return "\n".join(out)
 
 
-def render_html(d):
+def render_html(d: Document) -> str:
     parts = [
         "<!DOCTYPE html><html><head><meta charset='utf-8'>",
         f"<title>{_title(d)}</title><style>",
@@ -110,7 +141,7 @@ def render_html(d):
     return "".join(parts)
 
 
-def render_csv(d, fh):
+def render_csv(d: Document, fh: TextIO) -> None:
     w = csv.writer(fh)
     w.writerow(["group", "color", "title", "url"])
     for g in d["groups"]:
@@ -118,7 +149,7 @@ def render_csv(d, fh):
             w.writerow([g["name"], g["color"], t["title"], t["url"]])
 
 
-def render_tree(d, console):
+def render_tree(d: Document, console: Console) -> None:
     root = Tree(
         Text(_title(d), style="bold")
         + Text(f" — {d['group_count']} groups, {d['tab_count']} tabs", style="grey50")

@@ -40,7 +40,10 @@ from rich.text import Text
 from .render import (
     COLORS,
     RICH_STYLE,
+    Document,
     Format,
+    Group,
+    Tab,
     _title,
     render_csv,
     render_html,
@@ -189,7 +192,7 @@ def read_commands(data):
     return version, cmds
 
 
-def parse(data):
+def parse(data) -> Document:
     version, cmds = read_commands(data)
     gmeta = {}  # token -> (title, color)
     tab_group = {}  # tab_id -> token
@@ -248,11 +251,11 @@ def parse(data):
             continue
         groups_by_token[tok].append(tid)
 
-    result = []
+    result: list[Group] = []
     for tok, tids in groups_by_token.items():
         title, color = gmeta.get(tok, ("", 0))
         tids_sorted = sorted(tids, key=lambda t: tab_index.get(t, 1 << 30))
-        tabs = []
+        tabs: list[Tab] = []
         for t in tids_sorted:
             cn = current_nav(t)
             if cn is None:
@@ -329,7 +332,7 @@ def load_session(
         Path(tmp_path).unlink()
 
 
-def print_summary(d: dict, session_path: Path) -> None:
+def print_summary(d: Document, session_path: Path) -> None:
     table = Table(
         title=f"{_title(d)} — {d['group_count']} groups, {d['tab_count']} tabs",
         title_style="bold",
@@ -349,7 +352,7 @@ def print_summary(d: dict, session_path: Path) -> None:
     err.print(f"[grey50]source:[/] {session_path}")
 
 
-def write_all(d: dict, out_dir: Path) -> None:
+def write_all(d: Document, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "tabgroups.md").write_text(render_md(d), encoding="utf-8")
     (out_dir / "tabgroups.json").write_text(

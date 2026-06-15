@@ -54,7 +54,9 @@ from .config import LLMSettings, load_settings
 from .models import AssignmentList, Entry, Topic, TopicList
 from .render import (
     COLORS,
+    Document,
     Format,
+    Group,
     render_csv,
     render_html,
     render_md,
@@ -406,7 +408,7 @@ def build_document(
     noise: list[Entry],
     topics: list[Topic],
     assignments: dict[int, str],
-) -> dict:
+) -> Document:
     """Shape results into the exporter's {groups:[{name,color,tabs}]} document,
     grouped by topic, so the existing renderers can be reused as-is.
 
@@ -420,7 +422,7 @@ def build_document(
         buckets.setdefault(topic, []).append(e)
 
     ordered = [t.name for t in topics] + [UNCLASSIFIED]
-    groups = []
+    groups: list[Group] = []
     color_i = 0
     for name in ordered:
         tabs = buckets.get(name, [])
@@ -458,7 +460,7 @@ def build_document(
 
 
 def _assert_urls_preserved(
-    document: dict, entries: list[Entry], noise: list[Entry]
+    document: Document, entries: list[Entry], noise: list[Entry]
 ) -> None:
     """Hard guarantee: every input URL appears exactly once in the output, and
     no URL was fabricated. Aborts loudly if violated."""
@@ -478,7 +480,7 @@ def _assert_urls_preserved(
         raise typer.Exit(2)
 
 
-def _write_outputs(document: dict, fmt: Format, out_dir: Path) -> None:
+def _write_outputs(document: Document, fmt: Format, out_dir: Path) -> None:
     match fmt:
         case Format.all:
             out_dir.mkdir(parents=True, exist_ok=True)
