@@ -70,6 +70,10 @@ uv run tabgroups classify apply tabgroups/tabgroups.json -t topics.toml -f md
 
 输出格式与导出一致：`tree · md · json · html · csv · all`。
 
+模型结果会被缓存，所以改完 `topics.toml` 或新增几个标签后再跑，只会对真正变化的部分
+调用 LLM（`apply` 会打印缓存命中率）。加 `--no-cache` 可绕过缓存，
+`tabgroups classify cache clear` 可清空缓存。
+
 通过 `config.toml`（见 [`config.example.toml`](config.example.toml)）或 `TABGROUPS_*`
 环境变量（`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`）指向任一
 OpenAI 兼容接口，环境变量优先：

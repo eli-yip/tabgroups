@@ -47,6 +47,14 @@ from pydantic_settings import (
 )
 from rich.console import Console
 
+from .cache import (
+    CacheStats,
+    ModelCache,
+    classify_key,
+    discover_key,
+    open_cache,
+    resolve_cache_dir,
+)
 from .render import COLORS, render_csv, render_html, render_md, render_tree
 
 err = Console(stderr=True)
@@ -311,15 +319,34 @@ _DISCOVER_SYS = (
 
 
 async def discover_topics(
-    settings: LLMSettings, entries: Iterable[Entry]
-) -> list[Topic]:
+    settings: LLMSettings, entries: Iterable[Entry], cache: ModelCache | None = None
+) -> tuple[list[Topic], bool]:
+    """Propose topics; returns (topics, cache_hit). The whole call is cached by a
+    fingerprint of every entry's (title, domain)."""
+    entries = list(entries)
+    key = (
+        discover_key(
+            prompt=_DISCOVER_SYS,
+            model=settings.model,
+            temperature=_TEMPERATURE,
+            entries=[(e.title, e.domain) for e in entries],
+        )
+        if cache is not None
+        else None
+    )
+    if cache is not None and key is not None and (cached := cache.get(key)) is not None:
+        return TopicList.model_validate_json(cached).topics, True
+
     lines = [f"- {e.title or '(no title)'}  [{e.domain}]" for e in entries]
     user = "Here are the tabs (title [domain]):\n\n" + "\n".join(lines)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _DISCOVER_SYS},
         {"role": "user", "content": user},
     ]
-    return (await _acomplete(settings, messages, TopicList)).topics
+    result = await _acomplete(settings, messages, TopicList)
+    if cache is not None and key is not None:
+        cache.put(key, result.model_dump_json())
+    return result.topics, False
 
 
 def _toml_str(s: str) -> str:
@@ -374,16 +401,48 @@ def _batches[T](items: list[T], size: int) -> Iterable[list[T]]:
 
 
 async def classify_entries(
-    settings: LLMSettings, entries: list[Entry], topics: list[Topic]
-) -> dict[int, str]:
-    """Map entry id -> topic name (or UNCLASSIFIED). Defensive: a failed batch
-    or any unrecognized/missing id falls back to UNCLASSIFIED, never aborts."""
+    settings: LLMSettings,
+    entries: list[Entry],
+    topics: list[Topic],
+    cache: ModelCache | None = None,
+) -> tuple[dict[int, str], CacheStats]:
+    """Map entry id -> topic name (or UNCLASSIFIED), reusing cached per-tab
+    assignments. Returns (assignments, stats). Defensive: a failed batch or any
+    unrecognized/missing id falls back to UNCLASSIFIED, never aborts.
+
+    Only genuine model assignments that land in a valid topic are cached; the
+    UNCLASSIFIED fallback is never written, so a transient failure can't poison
+    a tab's cached result."""
     valid = {t.name for t in topics}
     topic_block = "\n".join(
         f"{i}. {t.name} — {t.description}" for i, t in enumerate(topics, 1)
     )
+
+    def key_for(e: Entry) -> str:
+        return classify_key(
+            prompt=_CLASSIFY_SYS,
+            model=settings.model,
+            temperature=_TEMPERATURE,
+            topic_block=topic_block,
+            title=e.title,
+            domain=e.domain,
+        )
+
     assigned: dict[int, str] = {}
-    batches = list(_batches(entries, _BATCH_SIZE))
+    stats = CacheStats()
+
+    # Pre-scan: serve cache hits directly, leave only misses for the model.
+    pending: list[Entry] = []
+    for e in entries:
+        cached = cache.get(key_for(e)) if cache is not None else None
+        if cached is not None:
+            assigned[e.id] = cached
+            stats.hits += 1
+        else:
+            pending.append(e)
+            stats.misses += 1
+
+    batches = list(_batches(pending, _BATCH_SIZE))
     for n, batch in enumerate(batches, 1):
         err.print(
             f"[grey50]classifying batch {n}/{len(batches)} ({len(batch)} tabs)...[/]"
@@ -400,19 +459,28 @@ async def classify_entries(
             {"role": "system", "content": _CLASSIFY_SYS},
             {"role": "user", "content": user},
         ]
+        by_id = {e.id: e for e in batch}
         try:
             result = await _acomplete(settings, messages, AssignmentList)
             for a in result.assignments:
-                assigned[a.id] = a.topic if a.topic in valid else UNCLASSIFIED
+                if a.id not in by_id:
+                    continue  # ignore ids we didn't ask about in this batch
+                # an unknown topic name normalizes to unclassified; a deliberate
+                # "unclassified" is a real model decision, not a failure.
+                topic = a.topic if a.topic in valid else UNCLASSIFIED
+                assigned[a.id] = topic
+                if cache is not None:  # cache every explicit per-tab decision
+                    cache.put(key_for(by_id[a.id]), topic)
         except Exception as e:
             err.print(
                 f"[yellow]warn:[/] batch {n} failed ({e}); "
                 "marking its tabs unclassified"
             )
-        # any id the model skipped or that failed -> unclassified
+        # any id the model skipped or whose batch failed -> unclassified, and
+        # NOT cached, so a transient miss can never be frozen onto a tab.
         for e in batch:
             assigned.setdefault(e.id, UNCLASSIFIED)
-    return assigned
+    return assigned, stats
 
 
 # ---------- assemble + render ----------
@@ -425,12 +493,16 @@ def build_document(
     assignments: dict[int, str],
 ) -> dict:
     """Shape results into the exporter's {groups:[{name,color,tabs}]} document,
-    grouped by topic, so the existing renderers can be reused as-is."""
-    by_id = {e.id: e for e in entries}
+    grouped by topic, so the existing renderers can be reused as-is.
+
+    Tabs are bucketed in original entry order (not assignments' dict order), so
+    the rendered output is identical regardless of how many assignments came from
+    the cache versus a fresh model call."""
     buckets: dict[str, list[Entry]] = {t.name: [] for t in topics}
     buckets[UNCLASSIFIED] = []
-    for eid, topic in assignments.items():
-        buckets.setdefault(topic, []).append(by_id[eid])
+    for e in entries:
+        topic = assignments.get(e.id, UNCLASSIFIED)
+        buckets.setdefault(topic, []).append(e)
 
     ordered = [t.name for t in topics] + [UNCLASSIFIED]
     groups = []
@@ -538,6 +610,15 @@ _UnwrapOpt = Annotated[
     bool,
     typer.Option(help="Unwrap archive/proxy URLs to their real source domain."),
 ]
+_NoCacheOpt = Annotated[
+    bool,
+    typer.Option("--no-cache", help="Bypass the model-output cache for this run."),
+]
+
+
+def _get_cache(no_cache: bool) -> ModelCache | None:
+    """Open the cache unless disabled. Returns None when --no-cache is set."""
+    return None if no_cache else open_cache(resolve_cache_dir())
 
 
 @app.command()
@@ -552,15 +633,22 @@ def discover(
     ] = Path("topics.toml"),
     config: _ConfigOpt = Path("config.toml"),
     unwrap: _UnwrapOpt = True,
+    no_cache: _NoCacheOpt = False,
 ) -> None:
     """Propose an editable topic list from the exported tabs."""
     settings = load_settings(config)
+    cache = _get_cache(no_cache)
     entries, noise, total = load_entries(export_json, unwrap=unwrap)
     err.print(
         f"[grey50]{total} tabs, {len(entries)} unique to classify "
         f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
     )
-    topics = asyncio.run(discover_topics(settings, entries))
+    topics, hit = asyncio.run(discover_topics(settings, entries, cache))
+    if cache is None:
+        err.print("[grey50]cache: disabled[/]")
+    else:
+        status = "hit" if hit else "miss"
+        err.print(f"[grey50]cache: {status} · {resolve_cache_dir()}[/]")
     write_topics_toml(topics, out)
     err.print(
         f"[green]wrote[/] {len(topics)} topics to [bold]{out}[/] — edit, then run:"
@@ -588,16 +676,18 @@ def apply(
     ] = Path("classified"),
     config: _ConfigOpt = Path("config.toml"),
     unwrap: _UnwrapOpt = True,
+    no_cache: _NoCacheOpt = False,
 ) -> None:
     """Classify tabs against an (edited) topic list and render the result."""
     settings = load_settings(config)
+    cache = _get_cache(no_cache)
     topics = load_topics_toml(topics_file)
     entries, noise, total = load_entries(export_json, unwrap=unwrap)
     err.print(
         f"[grey50]{total} tabs → {len(entries)} unique, {len(topics)} topics "
         f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
     )
-    assignments = asyncio.run(classify_entries(settings, entries, topics))
+    assignments, stats = asyncio.run(classify_entries(settings, entries, topics, cache))
     document = build_document(entries, noise, topics, assignments)
     _assert_urls_preserved(document, entries, noise)
 
@@ -605,4 +695,27 @@ def apply(
     for name, c in counts.items():
         err.print(f"  [bold]{c:>4}[/]  {name}")
     err.print(f"[green]✓ {len(entries) + len(noise)} URLs preserved, 0 fabricated[/]")
+    if cache is None:
+        err.print("[grey50]cache: disabled[/]")
+    else:
+        err.print(
+            f"[grey50]cache: {stats.hits}/{stats.total} hit "
+            f"({stats.rate():.0%}) · {resolve_cache_dir()}[/]"
+        )
     _write_outputs(document, fmt, out_dir)
+
+
+cache_app = typer.Typer(
+    no_args_is_help=True, help="Manage the model-output cache.", add_completion=False
+)
+app.add_typer(cache_app, name="cache")
+
+
+@cache_app.command("clear")
+def cache_clear() -> None:
+    """Empty the model-output cache."""
+    cache_dir = resolve_cache_dir()
+    cache = open_cache(cache_dir)
+    n = cache.clear()
+    cache.close()
+    err.print(f"[green]cleared[/] {n} cached entries from [bold]{cache_dir}[/]")

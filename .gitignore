@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# classify model-output cache (dev runs from source tree)
+/.cache/
+
 # local LLM config (holds the API key) + classify inputs/outputs
 /config.toml
 /topics.toml

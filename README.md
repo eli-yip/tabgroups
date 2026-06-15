@@ -72,6 +72,11 @@ uv run tabgroups classify apply tabgroups/tabgroups.json -t topics.toml -f md
 
 Output uses the same `tree · md · json · html · csv · all` formats as the export.
 
+Model results are cached, so re-running after editing `topics.toml` or adding a
+few tabs only calls the LLM for what actually changed (`apply` prints the cache
+hit rate). Pass `--no-cache` to bypass it, or `tabgroups classify cache clear`
+to wipe it.
+
 Point it at any OpenAI-compatible endpoint via `config.toml` (see
 [`config.example.toml`](config.example.toml)) or `TABGROUPS_*` environment variables
 (`TABGROUPS_BASE_URL` / `TABGROUPS_API_KEY` / `TABGROUPS_MODEL`), which take precedence:
