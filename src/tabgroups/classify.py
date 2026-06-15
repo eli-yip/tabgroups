@@ -325,9 +325,10 @@ async def classify_entries(
     assignments. Returns (assignments, stats). Defensive: a failed batch or any
     unrecognized/missing id falls back to UNCLASSIFIED, never aborts.
 
-    Only genuine model assignments that land in a valid topic are cached; the
-    UNCLASSIFIED fallback is never written, so a transient failure can't poison
-    a tab's cached result."""
+    Every explicit per-tab decision from the model is cached — including a
+    deliberate UNCLASSIFIED. Only the structural fallback for ids the model
+    skipped or whose batch failed is left uncached, so a transient failure can't
+    poison a tab's cached result."""
     valid = {t.name for t in topics}
     topic_block = "\n".join(
         f"{i}. {t.name} — {t.description}" for i, t in enumerate(topics, 1)
