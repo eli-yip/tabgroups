@@ -32,7 +32,7 @@ import sys
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NamedTuple, cast
 from urllib.parse import unquote
 
 import any_llm
@@ -122,14 +122,25 @@ def _is_noise(title: str, url: str) -> bool:
     return False
 
 
-def load_entries(
-    export_json: Path, *, unwrap: bool = True
-) -> tuple[list[Entry], list[Entry], int]:
-    """Read the export, dedup by URL, split noise out.
+class LoadedEntries(NamedTuple):
+    """A read export, with every tab sorted into exactly one of three buckets."""
 
-    Returns (classifiable_entries, noise_entries, total_seen). Ids are assigned
-    in first-seen order over the deduped set, so the same input yields the same
-    ids every run.
+    classifiable: list[Entry]  # first-seen real tabs, to be classified
+    noise: list[Entry]  # first-seen but junk (chrome://-style or empty URL)
+    duplicates: int  # tabs dropped because their URL was already seen
+
+    @property
+    def total(self) -> int:
+        """Tabs seen before dedup — the three buckets sum back to this."""
+        return len(self.classifiable) + len(self.noise) + self.duplicates
+
+
+def load_entries(export_json: Path, *, unwrap: bool = True) -> LoadedEntries:
+    """Read the export and sort each tab into one of three buckets: a real tab to
+    classify, noise, or a duplicate of an already-seen URL (dropped).
+
+    Ids are assigned in first-seen order over the kept tabs, so the same input
+    yields the same ids every run.
     """
     try:
         d = json.loads(export_json.read_text(encoding="utf-8"))
@@ -140,12 +151,12 @@ def load_entries(
     seen: set[str] = set()
     classifiable: list[Entry] = []
     noise: list[Entry] = []
-    total = 0
+    duplicates = 0
     for group in d.get("groups", []):
         for tab in group.get("tabs", []):
             url = tab.get("url", "")
-            total += 1
             if url in seen:
+                duplicates += 1  # same URL as an earlier tab — drop it
                 continue
             seen.add(url)
             title = (tab.get("title") or "").strip()
@@ -156,7 +167,7 @@ def load_entries(
                 domain=main_domain(url, unwrap=unwrap),
             )
             (noise if _is_noise(title, url) else classifiable).append(entry)
-    return classifiable, noise, total
+    return LoadedEntries(classifiable, noise, duplicates)
 
 
 # ---------- LLM plumbing ----------
@@ -564,10 +575,11 @@ def discover(
     """Propose an editable topic list from the exported tabs."""
     settings = load_settings(config)
     cache = _get_cache(no_cache)
-    entries, noise, total = load_entries(export_json, unwrap=unwrap)
+    loaded = load_entries(export_json, unwrap=unwrap)
+    entries = loaded.classifiable
     err.print(
-        f"[grey50]{total} tabs, {len(entries)} unique to classify "
-        f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
+        f"[grey50]{loaded.total} tabs, {len(entries)} unique to classify "
+        f"({len(loaded.noise)} noise, {loaded.duplicates} duplicates)[/]"
     )
     topics, hit = asyncio.run(discover_topics(settings, entries, cache))
     if cache is None:
@@ -613,10 +625,11 @@ def apply(
     settings = load_settings(config)
     cache = _get_cache(no_cache)
     topics = load_topics_toml(topics_file)
-    entries, noise, total = load_entries(export_json, unwrap=unwrap)
+    loaded = load_entries(export_json, unwrap=unwrap)
+    entries, noise = loaded.classifiable, loaded.noise
     err.print(
-        f"[grey50]{total} tabs → {len(entries)} unique, {len(topics)} topics "
-        f"({len(noise)} noise, {total - len(entries) - len(noise)} duplicates)[/]"
+        f"[grey50]{loaded.total} tabs → {len(entries)} unique, {len(topics)} topics "
+        f"({len(noise)} noise, {loaded.duplicates} duplicates)[/]"
     )
     assignments, stats = asyncio.run(classify_entries(settings, entries, topics, cache))
     document = build_document(entries, noise, topics, assignments)
