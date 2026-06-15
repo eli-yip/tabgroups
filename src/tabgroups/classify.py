@@ -172,13 +172,14 @@ def load_entries(export_json: Path, *, unwrap: bool = True) -> LoadedEntries:
 
 
 def _strip_json(text: str) -> str:
-    """Best-effort extraction of a JSON object from a model reply."""
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.split("```", 2)[1] if "```" in s[3:] else s[3:]
-        s = s.removeprefix("json").strip().removesuffix("```").strip()
-    start, end = s.find("{"), s.rfind("}")
-    return s[start : end + 1] if start != -1 and end != -1 else s
+    """Best-effort extraction of a JSON object from a model reply.
+
+    Slice from the first `{` to the last `}`. This already discards any
+    markdown code fence or prose the model wrapped around the object, since
+    those sit outside the braces.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if start != -1 and end != -1 else text
 
 
 # Per-process memory of whether the endpoint honors native structured output.
