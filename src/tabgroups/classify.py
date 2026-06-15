@@ -241,17 +241,15 @@ async def discover_topics(
     """Propose topics; returns (topics, cache_hit). The whole call is cached by a
     fingerprint of every entry's (title, domain)."""
     entries = list(entries)
-    key = (
-        discover_key(
-            prompt=_DISCOVER_SYS,
-            model=settings.model,
-            temperature=_TEMPERATURE,
-            entries=[(e.title, e.domain) for e in entries],
-        )
-        if cache is not None
-        else None
+    # Always derivable (a cheap hash of every entry's title+domain); only its
+    # use is gated on the cache, so each call site needs a single guard.
+    key = discover_key(
+        prompt=_DISCOVER_SYS,
+        model=settings.model,
+        temperature=_TEMPERATURE,
+        entries=[(e.title, e.domain) for e in entries],
     )
-    if cache is not None and key is not None and (cached := cache.get(key)) is not None:
+    if cache is not None and (cached := cache.get(key)) is not None:
         return TopicList.model_validate_json(cached).topics, True
 
     lines = [f"- {e.title or '(no title)'}  [{e.domain}]" for e in entries]
@@ -261,7 +259,7 @@ async def discover_topics(
         {"role": "user", "content": user},
     ]
     result = await _acomplete(settings, messages, TopicList)
-    if cache is not None and key is not None:
+    if cache is not None:
         cache.put(key, result.model_dump_json())
     return result.topics, False
 
