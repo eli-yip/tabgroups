@@ -13,6 +13,25 @@ point**:
 Keep it simple. Add new capabilities as subcommands of `tabgroups`, not as
 separate binaries.
 
+## Related project
+
+There is a sibling project, **[tabgroup-sweeper](https://github.com/eli-yip/tabgroup-sweeper)**
+(a Chromium MV3 extension, bun + TypeScript), typically checked out next to this
+repo (`../tabgroup-sweeper`). The two are **orthogonal**, and the split is
+deliberate:
+
+- **This repo** is read-only: it parses the on-disk SNSS file and never touches
+  the running browser.
+- **tabgroup-sweeper** acts on the *live* browser — it closes every tab in a tab
+  group, reading group membership directly via `chrome.tabGroups` / `chrome.tabs`.
+
+So **do not add tab-closing (or any live-browser control) to this CLI.** Closing
+grouped tabs was considered as a `close` subcommand here and rejected — only an
+extension can read tab-group membership exactly (AppleScript can't see groups;
+CDP can't attach to the default profile since Chrome 136). See
+[`docs/specs/2026-06-18-01-close-grouped-tabs.md`](docs/specs/2026-06-18-01-close-grouped-tabs.md)
+for that decision.
+
 ## Conventions
 
 - Before writing a commit message, read the recent commit history. Use the
