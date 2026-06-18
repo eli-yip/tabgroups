@@ -95,6 +95,13 @@ Export runs locally and uploads nothing; `classify` sends each tab's title and
 domain to the LLM endpoint you configure. Exported files contain your real
 browsing history.
 
+## Related
+
+Done exporting and want to **close** those grouped tabs?
+[tabgroup-sweeper](https://github.com/eli-yip/tabgroup-sweeper) is a companion
+Chromium extension that closes every tab in a tab group, leaving ungrouped tabs
+open.
+
 ## License
 
 [MIT](LICENSE)

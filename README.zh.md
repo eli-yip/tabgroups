@@ -91,6 +91,12 @@ model    = "gpt-4o-mini"
 导出完全在本地完成，不上传任何数据；`classify` 会把标签的标题和域名发送到你
 配置的 LLM 接口。导出的文件包含你真实的浏览历史。
 
+## 相关项目
+
+导出完想顺手**关掉**这些分组标签页？
+[tabgroup-sweeper](https://github.com/eli-yip/tabgroup-sweeper) 是配套的 Chromium
+扩展，一键关闭所有属于标签组的标签页，保留未分组的。
+
 ## 许可证
 
 [MIT](LICENSE)
